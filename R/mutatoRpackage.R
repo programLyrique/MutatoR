@@ -434,7 +434,8 @@ mutate_package <- function(pkg_dir, cores = parallel::detectCores(),
 
   mutant_ids <- names(mutants)
   pkg_dirs <- sapply(mutants, function(x) x$pkg)
-  pkg_dir_list <- setNames(as.list(pkg_dirs), mutant_ids)
+  pkg_dir_list <- as.list(pkg_dirs)
+  names(pkg_dir_list) <- mutant_ids
 
   # Run tests in parallel with progress bar
   parallel_results <- furrr::future_map(
