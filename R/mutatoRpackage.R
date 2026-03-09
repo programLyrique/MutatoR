@@ -33,6 +33,7 @@ delete_line_mutants <- function(src_file,
   mutants
 }
 
+# nocov start
 #' Identify equivalent mutants using OpenAI API
 #'
 #' Analyzes survived mutants to determine if they are functionally equivalent
@@ -287,6 +288,7 @@ get_openai_config <- function() {
 
   list(api_key = api_key, model = model)
 }
+# nocov end
 
 # Generate AST-based and line-deletion mutants for a single R file
 mutate_file <- function(src_file, out_dir = "mutations") {
