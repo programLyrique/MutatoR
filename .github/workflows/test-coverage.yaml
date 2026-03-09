@@ -38,6 +38,16 @@ jobs:
           covr::to_cobertura(cov)
         shell: Rscript {0}
 
+      - name: Ensure Codecov dependencies exist
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bash curl git gawk grep coreutils findutils gzip
+
+      - name: Verify coverage file exists
+        run: |
+          ls -lah ./cobertura.xml
+          test -s ./cobertura.xml
+
       - uses: codecov/codecov-action@v5
         with:
           # Fail if error if not on PR, or if on PR and token is given
