@@ -38,7 +38,7 @@ MutatoR/
 install.packages(c("devtools", "testthat", "httr", "jsonlite", "future", "furrr"))
 
 # Install from GitHub (if available)
-devtools::install_github("username/MutatoR")
+devtools::install_github("PRL-PRG/MutatoR")
 
 # Or install from local source
 # In R console

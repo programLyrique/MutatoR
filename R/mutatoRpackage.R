@@ -312,6 +312,8 @@ mutate_file <- function(src_file, out_dir = "mutations") {
   base_name <- basename(src_file)
   idx <- 1L
 
+  cat(sprintf("Generated %d AST-based mutants for %s\n", length(raw_mutations), base_name))
+
   # AST-driven mutants
   for (m in raw_mutations) {
     if (!is.list(m) && !is.language(m)) next
@@ -346,7 +348,7 @@ mutate_file <- function(src_file, out_dir = "mutations") {
 }
 
 # High-level: mutate every R file in a package, run tests in parallel, and summarize
-mutate_package <- function(pkg_dir, cores = parallel::detectCores(),
+mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
                            isFullLog = FALSE, detectEqMutants = FALSE,
                            mutation_dir = NULL) {
   if (is.null(mutation_dir)) {
@@ -362,16 +364,51 @@ mutate_package <- function(pkg_dir, cores = parallel::detectCores(),
     full.names = TRUE
   )
 
+  link_or_copy <- function(from, to, recursive = FALSE) {
+    linked <- tryCatch(file.symlink(from, to), warning = function(w) FALSE, error = function(e) FALSE)
+    if (!isTRUE(linked)) {
+      file.copy(from, to, recursive = recursive)
+    }
+  }
+
+  create_linked_package_copy <- function(pkg_dir, src_file, mutated_file, target_root) {
+    pkg_copy <- file.path(target_root, basename(pkg_dir))
+    dir.create(pkg_copy, recursive = TRUE, showWarnings = FALSE)
+
+    top_entries <- list.files(pkg_dir, all.files = TRUE, no.. = TRUE, full.names = TRUE)
+    for (entry in top_entries) {
+      name <- basename(entry)
+      if (identical(name, "R")) next
+      target <- file.path(pkg_copy, name)
+      link_or_copy(entry, target, recursive = dir.exists(entry))
+    }
+
+    original_r_dir <- file.path(pkg_dir, "R")
+    copy_r_dir <- file.path(pkg_copy, "R")
+    dir.create(copy_r_dir, recursive = TRUE, showWarnings = FALSE)
+
+    r_entries <- list.files(original_r_dir, all.files = TRUE, no.. = TRUE, full.names = TRUE)
+    for (entry in r_entries) {
+      name <- basename(entry)
+      target <- file.path(copy_r_dir, name)
+      if (identical(name, basename(src_file))) next
+      link_or_copy(entry, target, recursive = dir.exists(entry))
+    }
+
+    file.copy(mutated_file, file.path(copy_r_dir, basename(src_file)), overwrite = TRUE)
+    pkg_copy
+  }
+
   mutants <- list()
   for (src in r_files) {
     for (m in mutate_file(src, out_dir = mutation_dir)) {
       temp_root <- tempfile("mut_pkg_")
-      pkg_copy <- file.path(temp_root, basename(pkg_dir))
-      dir.create(pkg_copy, recursive = TRUE)
-      file.copy(pkg_dir, temp_root, recursive = TRUE)
-
-      target <- file.path(pkg_copy, "R", basename(src))
-      file.copy(m$path, target, overwrite = TRUE)
+      pkg_copy <- create_linked_package_copy(
+        pkg_dir = pkg_dir,
+        src_file = src,
+        mutated_file = m$path,
+        target_root = temp_root
+      )
 
       id <- paste(basename(src), basename(m$path), sep = "_")
       mutants[[id]] <- list(pkg = pkg_copy, info = m$info)
