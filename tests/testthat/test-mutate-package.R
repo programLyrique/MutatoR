@@ -66,6 +66,8 @@ test_that("mutate_package links unchanged package content", {
   skip_if_not_installed("devtools")
   skip_if_not_installed("furrr")
   skip_if_not_installed("future")
+  # Sys.readlink-based assertions are not reliable on Windows CI.
+  skip_on_os("windows")
 
   # Skip when symlinks are not supported in this environment.
   probe_dir <- tempfile()
