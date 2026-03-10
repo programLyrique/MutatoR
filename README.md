@@ -25,10 +25,9 @@ MutatoR is an automated mutation testing tool for the R language. It applies mut
 MutatoR/
 ├── R/                      # R source code
 │   ├── mutatoRpackage.R    # Core functionality
-│   └── sample/             # Sample R code
+│   └── init.R
 ├── src/                    # C++ source + Catch2 C++ tests (testthat integration)
 ├── tests/                  # R tests (includes compiled C++ test entrypoint)
-├── .openai_config.R.template # Template for OpenAI API configuration
 └── DESCRIPTION             # Package metadata
 ```
 
