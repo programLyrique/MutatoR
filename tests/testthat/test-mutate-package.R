@@ -164,3 +164,77 @@ License: MIT", pkg_name), file.path(pkg_dir, "DESCRIPTION"))
   expect_error(mutate_package(pkg_dir, cores = 1),
                "unmutated package failed")
 })
+
+test_that("mutate_package supports non-testthat packages via installed tests fallback", {
+  skip_if_not_installed("devtools")
+  skip_if_not_installed("furrr")
+  skip_if_not_installed("future")
+
+  temp_dir <- tempfile()
+  dir.create(temp_dir)
+  on.exit(unlink(temp_dir, recursive = TRUE), add = TRUE)
+
+  pkg_name <- "testInstalledFallback"
+  pkg_dir <- file.path(temp_dir, pkg_name)
+  dir.create(pkg_dir)
+  dir.create(file.path(pkg_dir, "R"), recursive = TRUE)
+  dir.create(file.path(pkg_dir, "tests"), recursive = TRUE)
+
+  writeLines(sprintf("Package: %s
+Version: 0.1.0
+Title: Installed tests fallback package
+Description: A package using tests/ scripts instead of testthat.
+Author: Test Author
+License: MIT", pkg_name), file.path(pkg_dir, "DESCRIPTION"))
+
+  writeLines("exportPattern(\"^[[:alpha:]]+\")", file.path(pkg_dir, "NAMESPACE"))
+
+  writeLines("inc <- function(x) {
+  x + 1
+}", file.path(pkg_dir, "R", "inc.R"))
+
+  writeLines("stopifnot(TRUE)", file.path(pkg_dir, "tests", "test-inc.R"))
+
+  result <- mutate_package(pkg_dir, cores = 1)
+
+  expect_true(is.list(result))
+  expect_true("package_mutants" %in% names(result))
+  expect_true("test_results" %in% names(result))
+  expect_true(length(result$test_results) > 0)
+})
+
+test_that("mutate_package fails fast for fallback strategy when baseline tests fail", {
+  skip_if_not_installed("devtools")
+  skip_if_not_installed("furrr")
+  skip_if_not_installed("future")
+
+  temp_dir <- tempfile()
+  dir.create(temp_dir)
+  on.exit(unlink(temp_dir, recursive = TRUE), add = TRUE)
+
+  pkg_name <- "testInstalledFallbackFail"
+  pkg_dir <- file.path(temp_dir, pkg_name)
+  dir.create(pkg_dir)
+  dir.create(file.path(pkg_dir, "R"), recursive = TRUE)
+  dir.create(file.path(pkg_dir, "tests"), recursive = TRUE)
+
+  writeLines(sprintf("Package: %s
+Version: 0.1.0
+Title: Installed tests fallback package
+Description: A package with failing tests/ scripts.
+Author: Test Author
+License: MIT", pkg_name), file.path(pkg_dir, "DESCRIPTION"))
+
+  writeLines("exportPattern(\"^[[:alpha:]]+\")", file.path(pkg_dir, "NAMESPACE"))
+
+  writeLines("always_true <- function() {
+  TRUE
+}", file.path(pkg_dir, "R", "always_true.R"))
+
+  writeLines("stop('baseline fallback failure')", file.path(pkg_dir, "tests", "test-fail.R"))
+
+  expect_error(
+    mutate_package(pkg_dir, cores = 1),
+    "strategy 'installed-tests'"
+  )
+})

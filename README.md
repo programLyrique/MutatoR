@@ -63,7 +63,14 @@ result <- mutate_package("path/to/your/package", mutation_dir = tempdir())
 
 ## Testing
 
-MutatoR uses `testthat` for R tests and `testthat` + Catch2 for C++ tests.
+MutatoR selects a package test strategy automatically:
+
+- If `tests/testthat/` exists, MutatoR uses `testthat::test_dir("tests/testthat")`.
+- Otherwise, if `tests/` exists, MutatoR falls back to `tools::testInstalledPackage(..., types = "tests")` after installing each mutant with `--install-tests`.
+
+The fallback path supports non-`testthat` layouts (for example `tinytest`-driven packages that run through `tests/` scripts), but it is slower because each mutant must be installed before tests are executed.
+
+MutatoR itself uses `testthat` for its own R tests and `testthat` + Catch2 for C++ tests.
 
 - C++ tests are located in `src/test-*.cpp`
 - The C++ test runner is `src/test-runner.cpp`

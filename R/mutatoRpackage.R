@@ -349,8 +349,8 @@ mutate_file <- function(src_file, out_dir = "mutations") {
 
 # High-level: mutate every R file in a package, run tests in parallel, and summarize
 mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
-                           isFullLog = FALSE, detectEqMutants = FALSE,
-                           mutation_dir = NULL) {
+                          isFullLog = FALSE, detectEqMutants = FALSE,
+                          mutation_dir = NULL) {
   pkg_dir <- normalizePath(pkg_dir, mustWork = TRUE)
   if (is.null(mutation_dir)) {
     mutation_dir <- tempfile("mutations_")
@@ -360,19 +360,235 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     dir.create(mutation_dir, recursive = TRUE, showWarnings = FALSE)
   }
 
+  last_test_failure <- NULL
+
+  set_last_test_failure <- function(msg) {
+    last_test_failure <<- msg
+  }
+
+  # Detect test strategy once and reuse it for baseline and all mutants.
+  detect_test_strategy <- function(pkg_path) {
+    testthat_dir <- file.path(pkg_path, "tests", "testthat")
+    tests_dir <- file.path(pkg_path, "tests")
+
+    if (dir.exists(testthat_dir)) {
+      return("testthat")
+    }
+    if (dir.exists(tests_dir)) {
+      return("installed-tests")
+    }
+
+    stop(
+      "No supported tests found. Expected either 'tests/testthat' or a 'tests/' directory.",
+      call. = FALSE
+    )
+  }
+
+  get_package_name <- function(pkg_path) {
+    description_path <- file.path(pkg_path, "DESCRIPTION")
+    if (!file.exists(description_path)) {
+      stop("Cannot determine package name: DESCRIPTION file is missing.", call. = FALSE)
+    }
+    desc <- read.dcf(description_path)
+    if (!"Package" %in% colnames(desc)) {
+      stop("Cannot determine package name: DESCRIPTION has no 'Package' field.", call. = FALSE)
+    }
+    desc[1, "Package"]
+  }
+
+  run_testthat_tests <- function(pkg_path) {
+    set_last_test_failure(NULL)
+
+    if (requireNamespace("grDevices", quietly = TRUE)) {
+      while (grDevices::dev.cur() > 1) grDevices::dev.off()
+    }
+
+    old_wd <- getwd()
+    on.exit(
+      {
+        setwd(old_wd)
+        if (requireNamespace("grDevices", quietly = TRUE)) {
+          while (grDevices::dev.cur() > 1) grDevices::dev.off()
+        }
+      },
+      add = TRUE
+    )
+    setwd(pkg_path)
+
+    loaded <- tryCatch(
+      {
+        devtools::load_all(quiet = TRUE)
+        TRUE
+      },
+      error = function(e) {
+        set_last_test_failure(paste0("Package load failed: ", e$message))
+        message("Load error: ", e$message)
+        FALSE
+      }
+    )
+    if (!loaded) {
+      return(FALSE)
+    }
+
+    passed <- tryCatch(
+      {
+        tr <- testthat::test_dir("tests/testthat")
+        num_failed <- sum(tr$failed)
+        if (num_failed > 0) {
+          set_last_test_failure(sprintf("testthat reported %d failing test(s).", num_failed))
+        }
+        num_failed == 0
+      },
+      error = function(e) {
+        set_last_test_failure(paste0("testthat execution failed: ", e$message))
+        message("Test error: ", e$message)
+        FALSE
+      }
+    )
+
+    passed
+  }
+
+  run_installed_package_tests <- function(pkg_path) {
+    set_last_test_failure(NULL)
+
+    pkg_name <- tryCatch(
+      get_package_name(pkg_path),
+      error = function(e) {
+        set_last_test_failure(paste0("Cannot read package metadata: ", e$message))
+        message("Package metadata error: ", e$message)
+        NULL
+      }
+    )
+    if (is.null(pkg_name)) {
+      return(FALSE)
+    }
+
+    temp_lib <- tempfile("mutator_lib_")
+    temp_out <- tempfile("mutator_test_out_")
+    dir.create(temp_lib, recursive = TRUE, showWarnings = FALSE)
+    dir.create(temp_out, recursive = TRUE, showWarnings = FALSE)
+    on.exit(unlink(temp_lib, recursive = TRUE, force = TRUE), add = TRUE)
+    on.exit(unlink(temp_out, recursive = TRUE, force = TRUE), add = TRUE)
+
+    r_bin <- file.path(R.home("bin"), "R")
+    install_output <- tryCatch(
+      suppressWarnings(system2(
+        r_bin,
+        args = c(
+          "CMD", "INSTALL",
+          "--install-tests",
+          "--no-multiarch",
+          paste0("--library=", temp_lib),
+          pkg_path
+        ),
+        stdout = TRUE,
+        stderr = TRUE
+      )),
+      error = function(e) e
+    )
+
+    if (inherits(install_output, "error")) {
+      set_last_test_failure(paste0("Installation command failed: ", install_output$message))
+      message("Install error: ", install_output$message)
+      return(FALSE)
+    }
+
+    install_status <- attr(install_output, "status")
+    if (is.null(install_status)) {
+      install_status <- 0L
+    }
+    if (!identical(as.integer(install_status), 0L)) {
+      set_last_test_failure(
+        paste0(
+          "Installation failed for package '", pkg_name,
+          "'. Ensure runtime/test dependencies are installed and package sources are valid."
+        )
+      )
+      message("Install error while running fallback tests for package: ", pkg_name)
+      if (length(install_output) > 0) {
+        message(paste(utils::tail(install_output, 10), collapse = "\n"))
+      }
+      return(FALSE)
+    }
+
+    test_code <- tryCatch(
+      {
+        old_r_libs <- Sys.getenv("R_LIBS", unset = "")
+        on.exit(Sys.setenv(R_LIBS = old_r_libs), add = TRUE)
+
+        # Ensure subprocesses spawned by tools::testInstalledPackage can find
+        # the freshly installed package in the temporary library.
+        fallback_libs <- paste(c(temp_lib, .libPaths()), collapse = .Platform$path.sep)
+        Sys.setenv(R_LIBS = fallback_libs)
+
+        tools::testInstalledPackage(
+          pkg = pkg_name,
+          lib.loc = temp_lib,
+          outDir = temp_out,
+          types = "tests"
+        )
+      },
+      error = function(e) e
+    )
+
+    if (inherits(test_code, "error")) {
+      set_last_test_failure(paste0("tools::testInstalledPackage() failed: ", test_code$message))
+      message("Fallback test execution error: ", test_code$message)
+      return(FALSE)
+    }
+
+    passed <- identical(as.integer(test_code), 0L)
+    if (!passed) {
+      set_last_test_failure(
+        paste0(
+          "Installed package tests failed for '", pkg_name,
+          "'. Check files under tests/ and verify dependencies required by tests are available."
+        )
+      )
+    }
+
+    passed
+  }
+
+  test_strategy <- detect_test_strategy(pkg_dir)
+
+  run_tests <- function(pkg_path) {
+    if (identical(test_strategy, "testthat")) {
+      return(run_testthat_tests(pkg_path))
+    }
+    if (identical(test_strategy, "installed-tests")) {
+      return(run_installed_package_tests(pkg_path))
+    }
+    stop(sprintf("Unknown test strategy '%s'.", test_strategy), call. = FALSE)
+  }
+
   # Sanity check: verify the unmutated package can load and its tests pass
   baseline_ok <- tryCatch(
     {
-      old_wd <- getwd()
-      on.exit(setwd(old_wd), add = TRUE)
-      setwd(pkg_dir)
-      devtools::load_all(quiet = TRUE)
-      tr <- testthat::test_dir("tests/testthat")
-      setwd(old_wd)
-      on.exit(NULL, add = FALSE)
-      if (sum(tr$failed) > 0) {
-        stop(sprintf("Baseline test suite has %d failure(s). Fix the tests before running mutation testing.",
-                      sum(tr$failed)))
+      baseline_passed <- run_tests(pkg_dir)
+      if (!isTRUE(baseline_passed)) {
+        detail_msg <- if (is.null(last_test_failure)) {
+          "No additional details captured."
+        } else {
+          last_test_failure
+        }
+
+        strategy_hint <- if (identical(test_strategy, "installed-tests")) {
+          paste0(
+            " In fallback mode, MutatoR installs the package with '--install-tests' and runs ",
+            "tools::testInstalledPackage(..., types = 'tests')."
+          )
+        } else {
+          ""
+        }
+
+        stop(sprintf(
+          "Baseline test suite failed under strategy '%s'.\n  Details: %s%s",
+          test_strategy,
+          detail_msg,
+          strategy_hint
+        ))
       }
       TRUE
     },
@@ -437,52 +653,6 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
       mutants[[id]] <- list(pkg = pkg_copy, info = m$info)
     }
   }
-
-  run_tests <- function(pkg_dir) {
-    # Close any open graphics devices before running tests
-    if (requireNamespace("grDevices", quietly = TRUE)) {
-      while (grDevices::dev.cur() > 1) grDevices::dev.off()
-    }
-    old_wd <- getwd()
-    on.exit(
-      {
-        setwd(old_wd)
-        if (requireNamespace("grDevices", quietly = TRUE)) {
-          while (grDevices::dev.cur() > 1) grDevices::dev.off()
-        }
-      },
-      add = TRUE
-    )
-    setwd(pkg_dir)
-
-    loaded <- tryCatch(
-      {
-        devtools::load_all(quiet = TRUE)
-        TRUE
-      },
-      error = function(e) {
-        message("Load error: ", e$message)
-        FALSE
-      }
-    )
-    if (!loaded) {
-      return(FALSE)
-    }
-
-    passed <- tryCatch(
-      {
-        tr <- testthat::test_dir("tests/testthat")
-        num_failed <- sum(tr$failed)
-        num_failed == 0
-      },
-      error = function(e) {
-        message("Test error: ", e$message)
-        FALSE
-      }
-    )
-    passed
-  }
-
 
   # options(
   #   future.devices.onMisuse = "warning",   # or "ignore"
