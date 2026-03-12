@@ -54,51 +54,51 @@ test_check(\"testpkg\")", file.path(pkg_dir, "tests", "testthat.R"))
   expect_true(length(result$test_results) > 0)
 })
 
-test_that("mutate_package marks mutants as killed when package tests fail", {
+test_that("mutate_package marks mutants as killed when mutations break tests", {
   # Skip test if dependencies are not available
   skip_if_not_installed("devtools")
   skip_if_not_installed("furrr")
   skip_if_not_installed("future")
 
-  # Create a package with a failing test
+  # Create a package whose baseline passes but mutations cause failures
   temp_dir <- tempfile()
   dir.create(temp_dir)
   on.exit(unlink(temp_dir, recursive = TRUE))
 
-  # Create a simple package structure
-  pkg_dir <- file.path(temp_dir, "badpkg")
+  pkg_dir <- file.path(temp_dir, "killpkg")
   dir.create(pkg_dir)
   dir.create(file.path(pkg_dir, "R"), recursive = TRUE)
   dir.create(file.path(pkg_dir, "tests", "testthat"), recursive = TRUE)
 
-  writeLines("Package: badpkg
+  writeLines("Package: killpkg
 Version: 0.1.0
-Title: Bad Package
-Description: A package with failing tests.
+Title: Kill Package
+Description: A package where mutations get killed.
 Author: Test Author
 License: MIT
 RoxygenNote: 7.1.1", file.path(pkg_dir, "DESCRIPTION"))
 
   writeLines("exportPattern(\"^[[:alpha:]]+\")", file.path(pkg_dir, "NAMESPACE"))
 
-  # Create a valid function
-  writeLines("bad_function <- function(x) {
+  # A function whose + operator can be mutated to -
+  writeLines("inc <- function(x) {
   x + 1
-}", file.path(pkg_dir, "R", "bad.R"))
+}", file.path(pkg_dir, "R", "inc.R"))
 
-  # Create test harness and a failing test
   writeLines("library(testthat)
-library(badpkg)
+library(killpkg)
 
-test_check(\"badpkg\")", file.path(pkg_dir, "tests", "testthat.R"))
+test_check(\"killpkg\")", file.path(pkg_dir, "tests", "testthat.R"))
 
-  writeLines("test_that(\"bad_function fails intentionally\", {
-  expect_equal(bad_function(1), 999)
-})", file.path(pkg_dir, "tests", "testthat", "test-bad.R"))
+  # This test passes on the original but fails when + is mutated to -
+  writeLines("test_that(\"inc adds one\", {
+  expect_equal(inc(1), 2)
+})", file.path(pkg_dir, "tests", "testthat", "test-inc.R"))
 
   result <- mutate_package(pkg_dir, cores = 1)
 
   expect_true(is.list(result))
   expect_true(length(result$test_results) > 0)
+  # At least one mutant should be killed
   expect_true(any(vapply(result$test_results, isFALSE, logical(1))))
 })
