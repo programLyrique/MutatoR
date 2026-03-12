@@ -360,6 +360,28 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     dir.create(mutation_dir, recursive = TRUE, showWarnings = FALSE)
   }
 
+  # Sanity check: verify the unmutated package can load and its tests pass
+  baseline_ok <- tryCatch(
+    {
+      old_wd <- getwd()
+      on.exit(setwd(old_wd), add = TRUE)
+      setwd(pkg_dir)
+      devtools::load_all(quiet = TRUE)
+      tr <- testthat::test_dir("tests/testthat")
+      setwd(old_wd)
+      on.exit(NULL, add = FALSE)
+      if (sum(tr$failed) > 0) {
+        stop(sprintf("Baseline test suite has %d failure(s). Fix the tests before running mutation testing.",
+                      sum(tr$failed)))
+      }
+      TRUE
+    },
+    error = function(e) {
+      stop(sprintf("Cannot run mutation testing: the unmutated package failed.\n  %s", e$message),
+           call. = FALSE)
+    }
+  )
+
   r_files <- list.files(file.path(pkg_dir, "R"),
     pattern = "\\.R$",
     full.names = TRUE

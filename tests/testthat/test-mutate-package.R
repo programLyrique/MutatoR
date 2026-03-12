@@ -126,3 +126,41 @@ test_check(\"%s\")", pkg_name, pkg_name), file.path(pkg_dir, "tests", "testthat.
   # Exactly one file in R/ should be copied (the mutated one), all others linked.
   expect_equal(symlink_count, length(mutant_r_files) - 1)
 })
+
+test_that("mutate_package fails fast when baseline tests fail", {
+  skip_if_not_installed("devtools")
+  skip_if_not_installed("furrr")
+  skip_if_not_installed("future")
+
+  temp_dir <- tempfile()
+  dir.create(temp_dir)
+  on.exit(unlink(temp_dir, recursive = TRUE))
+
+  pkg_name <- "testBaselineFail"
+  pkg_dir <- file.path(temp_dir, pkg_name)
+  dir.create(pkg_dir)
+  dir.create(file.path(pkg_dir, "R"), recursive = TRUE)
+  dir.create(file.path(pkg_dir, "tests", "testthat"), recursive = TRUE)
+
+  writeLines(sprintf("Package: %s
+Version: 0.1.0
+Title: Test Package
+Description: A test package.
+Author: Test Author
+License: MIT", pkg_name), file.path(pkg_dir, "DESCRIPTION"))
+
+  writeLines("exportPattern(\"^[[:alpha:]]+\")", file.path(pkg_dir, "NAMESPACE"))
+
+  writeLines("my_add <- function(x, y) { x + y }", file.path(pkg_dir, "R", "my_add.R"))
+
+  writeLines(sprintf("library(testthat)\nlibrary(%s)\ntest_check(\"%s\")",
+                      pkg_name, pkg_name), file.path(pkg_dir, "tests", "testthat.R"))
+
+  # A test that always fails
+  writeLines("test_that(\"deliberately failing\", {
+  expect_equal(1, 2)
+})", file.path(pkg_dir, "tests", "testthat", "test-fail.R"))
+
+  expect_error(mutate_package(pkg_dir, cores = 1),
+               "unmutated package failed")
+})
