@@ -39,6 +39,8 @@ context("Mutator C++ tests")
                               TYPEOF(result.first) == EXPRSXP ||
                               TYPEOF(result.first) == VECSXP;
             expect_true(valid_type);
+            if (result.second && result.first != R_NilValue)
+                UNPROTECT(1);
         }
         else
         {
@@ -74,6 +76,8 @@ context("Mutator C++ tests")
         expect_true(result.second == true);
         expect_true(TYPEOF(result.first) == LANGSXP);
         expect_true(Rf_getAttrib(result.first, Rf_install("mutation_info")) != R_NilValue);
+        if (result.second && result.first != R_NilValue)
+            UNPROTECT(1);
         UNPROTECT(1);
     }
 
@@ -103,6 +107,8 @@ context("Mutator C++ tests")
         expect_true(result.second == true);
         expect_true(TYPEOF(result.first) == LANGSXP);
         expect_true(Rf_getAttrib(result.first, Rf_install("mutation_info")) != R_NilValue);
+        if (result.second && result.first != R_NilValue)
+            UNPROTECT(1);
         UNPROTECT(1);
     }
 
@@ -124,6 +130,8 @@ context("Mutator C++ tests")
 
             expect_true(result.second == true);
             expect_true(TYPEOF(result.first) == LANGSXP);
+            if (result.second && result.first != R_NilValue)
+                UNPROTECT(1);
 
             UNPROTECT(2);
         }
