@@ -25,9 +25,25 @@ delete_line_mutants <- function(src_file,
     idx <- sample(valid_lines, 1)
     out_file <- file.path(out_dir, sprintf("%s_%03d.R", file_base, start_idx + i - 1))
     writeLines(lines[-idx], out_file)
+
+    deleted_text <- lines[idx]
+    if (length(deleted_text) == 0 || is.na(deleted_text) || !nzchar(deleted_text)) {
+      deleted_text <- NA_character_
+    }
+
     mutants[[i]] <- list(
       path = out_file,
-      info = sprintf("deleted line %d", idx)
+      info = list(
+        start_line = as.integer(idx),
+        start_col = 1L,
+        end_line = as.integer(idx),
+        end_col = 1L,
+        original_symbol = deleted_text,
+        new_symbol = NA_character_,
+        file_path = normalizePath(src_file, mustWork = FALSE),
+        mutation_type = "line_deletion",
+        deleted_line = as.integer(idx)
+      )
     )
   }
   mutants
@@ -307,6 +323,56 @@ normalize_max_mutants <- function(max_mutants, arg = "max_mutants") {
   as.integer(max_mutants)
 }
 
+format_mutation_info <- function(src_file, raw_info = NULL) {
+  file_path <- normalizePath(src_file, mustWork = FALSE)
+  if (is.list(raw_info) && !is.null(raw_info$file_path) && length(raw_info$file_path) > 0 &&
+      !is.na(raw_info$file_path[1]) && nzchar(raw_info$file_path[1])) {
+    file_path <- as.character(raw_info$file_path[1])
+  }
+
+  parts <- c(sprintf("File: %s", file_path))
+
+  if (is.list(raw_info) && !is.null(raw_info$start_line) && !is.null(raw_info$start_col) &&
+      !is.null(raw_info$end_line) && !is.null(raw_info$end_col)) {
+    start_line <- as.integer(raw_info$start_line)
+    start_col <- as.integer(raw_info$start_col)
+    end_line <- as.integer(raw_info$end_line)
+    end_col <- as.integer(raw_info$end_col)
+
+    parts <- c(parts, sprintf(
+      "Range: %d:%d-%d:%d",
+      start_line,
+      start_col,
+      end_line,
+      end_col
+    ))
+  }
+
+  if (is.list(raw_info)) {
+    if (!is.null(raw_info$mutation_type) &&
+        length(raw_info$mutation_type) > 0 &&
+        identical(as.character(raw_info$mutation_type[1]), "line_deletion") &&
+        !is.null(raw_info$deleted_line) &&
+        length(raw_info$deleted_line) > 0) {
+      parts <- c(parts, sprintf("Details: deleted line %d", as.integer(raw_info$deleted_line[1])))
+      return(paste(parts, collapse = "\n"))
+    }
+
+    original_symbol <- if (!is.null(raw_info$original_symbol) && length(raw_info$original_symbol) > 0) raw_info$original_symbol[1] else NA_character_
+    new_symbol <- if (!is.null(raw_info$new_symbol) && length(raw_info$new_symbol) > 0) raw_info$new_symbol[1] else NA_character_
+
+    if (!is.na(original_symbol) || !is.na(new_symbol)) {
+      new_label <- if (is.na(new_symbol)) "<deleted>" else new_symbol
+      old_label <- if (is.na(original_symbol)) "<unknown>" else original_symbol
+      parts <- c(parts, sprintf("Details: '%s' -> '%s'", old_label, new_label))
+    }
+  } else if (!is.null(raw_info) && nzchar(raw_info)) {
+    parts <- c(parts, sprintf("Details: %s", raw_info))
+  }
+
+  paste(parts, collapse = "\n")
+}
+
 # Generate AST-based and line-deletion mutants for a single R file
 mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL) {
   max_mutants <- normalize_max_mutants(max_mutants)
@@ -348,7 +414,7 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL) {
     writeLines(paste(code, collapse = "\n"), out_file)
 
     info <- attr(m, "mutation_info")
-    if (is.null(info) || info == "") info <- "<no info>"
+    if (is.null(info) || (is.character(info) && length(info) == 1 && info == "")) info <- "<no info>"
 
     results[[length(results) + 1]] <- list(path = out_file, info = info)
     idx <- idx + 1L
@@ -365,6 +431,13 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL) {
 
   if (!is.null(max_mutants) && length(results) > max_mutants) {
     results <- results[base::sample.int(length(results), max_mutants)]
+  }
+
+  for (i in seq_along(results)) {
+    results[[i]]$info <- format_mutation_info(
+      src_file = src_file,
+      raw_info = results[[i]]$info
+    )
   }
 
   results

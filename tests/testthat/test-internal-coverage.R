@@ -34,7 +34,9 @@ test_that("delete_line_mutants creates indexed mutant files", {
     expect_equal(basename(mutants[[1]]$path), "example.R_010.R")
     expect_equal(basename(mutants[[2]]$path), "example.R_011.R")
     expect_true(all(vapply(mutants, function(m) file.exists(m$path), logical(1))))
-    expect_true(all(vapply(mutants, function(m) grepl("deleted line", m$info), logical(1))))
+    expect_true(all(vapply(mutants, function(m) is.list(m$info), logical(1))))
+    expect_true(all(vapply(mutants, function(m) identical(m$info$mutation_type, "line_deletion"), logical(1))))
+    expect_true(all(vapply(mutants, function(m) !is.null(m$info$deleted_line), logical(1))))
 })
 
 test_that("delete_line_mutants returns empty list when no valid lines", {
@@ -186,7 +188,7 @@ test_that("mutate_file falls back to line-deletion mutants when C call fails", {
     mutants <- mutate_file(src, out_dir = out_dir)
 
     expect_true(length(mutants) >= 1)
-    expect_true(any(vapply(mutants, function(m) grepl("deleted line", m$info), logical(1))))
+    expect_true(any(vapply(mutants, function(m) grepl("deleted line", m$info, fixed = TRUE), logical(1))))
     expect_true(all(vapply(mutants, function(m) file.exists(m$path), logical(1))))
 })
 
