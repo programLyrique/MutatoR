@@ -63,6 +63,9 @@ result <- mutate_package("path/to/your/package")
 # Optional: cap tested mutants across the whole package
 result <- mutate_package("path/to/your/package", max_mutants = 100)
 
+# Optional: set a fixed timeout (seconds) per mutant test run
+result <- mutate_package("path/to/your/package", timeout_seconds = 60)
+
 # Optional: control where mutant files are written
 result <- mutate_package("path/to/your/package", mutation_dir = tempdir())
 ```
@@ -75,6 +78,14 @@ MutatoR selects a package test strategy automatically:
 - Otherwise, if `tests/` exists, MutatoR falls back to `tools::testInstalledPackage(..., types = "tests")` after installing each mutant with `--install-tests`.
 
 The fallback path supports non-`testthat` layouts (for example `tinytest`-driven packages that run through `tests/` scripts), but it is slower because each mutant must be installed before tests are executed.
+
+Each mutant test run uses a timeout. By default, MutatoR runs the baseline suite first and derives the per-mutant timeout as `baseline_elapsed_seconds * 1.5`. You can override this by setting `timeout_seconds` explicitly.
+
+Mutant outcomes are reported as:
+
+- `SURVIVED`: tests passed for the mutant
+- `KILLED`: tests failed (or execution error)
+- `HANG`: mutant exceeded timeout
 
 MutatoR itself uses `testthat` for its own R tests and `testthat` + Catch2 for C++ tests.
 

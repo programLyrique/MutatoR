@@ -234,7 +234,102 @@ test_that("mutate_package handles empty test results as killed mutants", {
 
     expect_true(is.list(result))
     expect_true(length(result$test_results) >= 1)
-    expect_true(all(vapply(result$test_results, isFALSE, logical(1))))
+    expect_true(all(vapply(result$test_results, function(x) identical(x, "KILLED"), logical(1))))
+})
+
+test_that("mutate_package marks timed-out mutants as HANG", {
+    mutate_package <- resolve_mutator_fn("mutate_package")
+
+    pkg_info <- create_test_package("testMutatoRTimeoutHang")
+    on.exit(cleanup_test_package(pkg_info), add = TRUE)
+
+    mutation_dir <- tempfile("mutations_hang_")
+    dir.create(mutation_dir, recursive = TRUE)
+    on.exit(unlink(mutation_dir, recursive = TRUE), add = TRUE)
+
+    mut_path <- file.path(mutation_dir, "my_abs.R_001.R")
+    writeLines("my_abs <- function(x) x", mut_path)
+
+    testthat::local_mocked_bindings(
+        mutate_file = function(...) {
+            list(list(path = mut_path, info = "mock mutation"))
+        },
+        .package = "MutatoR"
+    )
+    testthat::local_mocked_bindings(
+        future_map = function(.x, .f, ...) {
+            out <- lapply(.x, function(...) "HANG")
+            names(out) <- names(.x)
+            out
+        },
+        furrr_options = function(...) NULL,
+        .package = "furrr"
+    )
+    testthat::local_mocked_bindings(
+        plan = function(...) NULL,
+        .package = "future"
+    )
+
+    result <- mutate_package(
+        pkg_dir = pkg_info$pkg_dir,
+        cores = 1,
+        mutation_dir = mutation_dir
+    )
+
+    expect_equal(unname(unlist(result$test_results)), "HANG")
+    expect_equal(result$package_mutants[[1]]$status, "HANG")
+})
+
+test_that("mutate_package passes explicit timeout to inline worker execution", {
+    mutate_package <- resolve_mutator_fn("mutate_package")
+
+    pkg_info <- create_test_package("testMutatoRExplicitTimeout")
+    on.exit(cleanup_test_package(pkg_info), add = TRUE)
+
+    mutation_dir <- tempfile("mutations_timeout_override_")
+    dir.create(mutation_dir, recursive = TRUE)
+    on.exit(unlink(mutation_dir, recursive = TRUE), add = TRUE)
+
+    mut_path <- file.path(mutation_dir, "my_abs.R_001.R")
+    writeLines("my_abs <- function(x) x", mut_path)
+
+    observed_timeout <- NA_real_
+
+    testthat::local_mocked_bindings(
+        mutate_file = function(...) {
+            list(list(path = mut_path, info = "mock mutation"))
+        },
+        .package = "MutatoR"
+    )
+    testthat::local_mocked_bindings(
+        future_map = function(.x, .f, ...) {
+            dots <- list(...)
+            if (!is.null(dots$.options) && !is.null(dots$.options$globals)) {
+                observed_timeout <<- dots$.options$globals$effective_timeout_seconds
+            }
+            out <- lapply(.x, .f)
+            names(out) <- names(.x)
+            out
+        },
+        furrr_options = function(...) {
+            list(...)
+        },
+        .package = "furrr"
+    )
+    testthat::local_mocked_bindings(
+        plan = function(...) NULL,
+        .package = "future"
+    )
+
+    result <- mutate_package(
+        pkg_dir = pkg_info$pkg_dir,
+        cores = 1,
+        mutation_dir = mutation_dir,
+        timeout_seconds = 12.5
+    )
+
+    expect_true(is.list(result))
+    expect_equal(observed_timeout, 12.5)
 })
 
 test_that("mutate_package computes equivalent mutant summary when enabled", {
@@ -323,6 +418,13 @@ test_that("max_mutants validation rejects invalid values", {
     expect_error(mutate_package(tempdir(), max_mutants = -1), "max_mutants")
     expect_error(mutate_package(tempdir(), max_mutants = c(1, 2)), "single finite")
     expect_error(mutate_package(tempdir(), max_mutants = 1.5), "whole number")
+})
+
+test_that("timeout parameter validation rejects invalid values", {
+    mutate_package <- resolve_mutator_fn("mutate_package")
+
+    expect_error(mutate_package(tempdir(), timeout_seconds = 0), "timeout_seconds")
+    expect_error(mutate_package(tempdir(), timeout_seconds = c(1, 2)), "single finite")
 })
 
 test_that("mutate_package caps total mutants with max_mutants", {

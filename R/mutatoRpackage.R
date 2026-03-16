@@ -326,14 +326,14 @@ normalize_max_mutants <- function(max_mutants, arg = "max_mutants") {
 format_mutation_info <- function(src_file, raw_info = NULL) {
   file_path <- normalizePath(src_file, mustWork = FALSE)
   if (is.list(raw_info) && !is.null(raw_info$file_path) && length(raw_info$file_path) > 0 &&
-      !is.na(raw_info$file_path[1]) && nzchar(raw_info$file_path[1])) {
+    !is.na(raw_info$file_path[1]) && nzchar(raw_info$file_path[1])) {
     file_path <- as.character(raw_info$file_path[1])
   }
 
   parts <- c(sprintf("File: %s", file_path))
 
   if (is.list(raw_info) && !is.null(raw_info$start_line) && !is.null(raw_info$start_col) &&
-      !is.null(raw_info$end_line) && !is.null(raw_info$end_col)) {
+    !is.null(raw_info$end_line) && !is.null(raw_info$end_col)) {
     start_line <- as.integer(raw_info$start_line)
     start_col <- as.integer(raw_info$start_col)
     end_line <- as.integer(raw_info$end_line)
@@ -350,10 +350,10 @@ format_mutation_info <- function(src_file, raw_info = NULL) {
 
   if (is.list(raw_info)) {
     if (!is.null(raw_info$mutation_type) &&
-        length(raw_info$mutation_type) > 0 &&
-        identical(as.character(raw_info$mutation_type[1]), "line_deletion") &&
-        !is.null(raw_info$deleted_line) &&
-        length(raw_info$deleted_line) > 0) {
+      length(raw_info$mutation_type) > 0 &&
+      identical(as.character(raw_info$mutation_type[1]), "line_deletion") &&
+      !is.null(raw_info$deleted_line) &&
+      length(raw_info$deleted_line) > 0) {
       parts <- c(parts, sprintf("Details: deleted line %d", as.integer(raw_info$deleted_line[1])))
       return(paste(parts, collapse = "\n"))
     }
@@ -445,9 +445,20 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL) {
 
 # High-level: mutate every R file in a package, run tests in parallel, and summarize
 mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
-                          isFullLog = FALSE, detectEqMutants = FALSE,
-                          mutation_dir = NULL, max_mutants = NULL) {
+                           isFullLog = FALSE, detectEqMutants = FALSE,
+                           mutation_dir = NULL, max_mutants = NULL,
+                           timeout_seconds = NULL) {
+  timeout_multiplier <- 1.5
   max_mutants <- normalize_max_mutants(max_mutants)
+  if (!is.null(timeout_seconds)) {
+    if (!is.numeric(timeout_seconds) || length(timeout_seconds) != 1 || !is.finite(timeout_seconds)) {
+      stop("`timeout_seconds` must be a single finite numeric value.", call. = FALSE)
+    }
+    if (timeout_seconds <= 0) {
+      stop("`timeout_seconds` must be greater than 0.", call. = FALSE)
+    }
+    timeout_seconds <- as.numeric(timeout_seconds)
+  }
 
   pkg_dir <- normalizePath(pkg_dir, mustWork = TRUE)
   if (is.null(mutation_dir)) {
@@ -661,10 +672,17 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     stop(sprintf("Unknown test strategy '%s'.", test_strategy), call. = FALSE)
   }
 
+  baseline_elapsed_seconds <- NA_real_
+  effective_timeout_seconds <- NA_real_
+
   # Sanity check: verify the unmutated package can load and its tests pass
   baseline_ok <- tryCatch(
     {
-      baseline_passed <- run_tests(pkg_dir)
+      baseline_timing <- system.time({
+        baseline_passed <- run_tests(pkg_dir)
+      })
+      baseline_elapsed_seconds <- unname(as.numeric(baseline_timing[["elapsed"]]))
+
       if (!isTRUE(baseline_passed)) {
         detail_msg <- if (is.null(last_test_failure)) {
           "No additional details captured."
@@ -692,7 +710,8 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     },
     error = function(e) {
       stop(sprintf("Cannot run mutation testing: the unmutated package failed.\n  %s", e$message),
-           call. = FALSE)
+        call. = FALSE
+      )
     }
   )
 
@@ -764,11 +783,35 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
 
   mutant_ids <- names(mutants)
   parallel_results <- list()
+  workers_to_use <- max(1, min(cores, max(1, length(mutants))))
+
+  effective_timeout_seconds <- if (!is.null(timeout_seconds)) {
+    timeout_seconds
+  } else {
+    baseline_elapsed_seconds * timeout_multiplier
+  }
+
+  if (!is.finite(effective_timeout_seconds) || effective_timeout_seconds <= 0) {
+    stop("Could not derive a valid timeout from baseline execution.", call. = FALSE)
+  }
+
+  if (isFullLog) {
+    cat(sprintf(
+      "Baseline runtime: %.2fs | Mutant timeout: %.2fs (%s)\n",
+      baseline_elapsed_seconds,
+      effective_timeout_seconds,
+      if (is.null(timeout_seconds)) {
+        sprintf("baseline x %.2f", timeout_multiplier)
+      } else {
+        "explicit"
+      }
+    ))
+  }
 
   if (length(mutants) > 0) {
     # Set up parallel processing
     future::plan(future::multisession,
-      workers = min(cores, length(mutants))
+      workers = workers_to_use
     )
 
     pkg_dirs <- sapply(mutants, function(x) x$pkg)
@@ -778,9 +821,37 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     # Run tests in parallel with progress bar
     parallel_results <- furrr::future_map(
       pkg_dir_list,
-      function(pkg) run_tests(pkg),
+      function(pkg) {
+        tryCatch(
+          {
+            setTimeLimit(
+              cpu = effective_timeout_seconds,
+              elapsed = effective_timeout_seconds,
+              transient = TRUE
+            )
+            on.exit(setTimeLimit(cpu = Inf, elapsed = Inf, transient = FALSE), add = TRUE)
+
+            passed <- run_tests(pkg)
+            if (isTRUE(passed)) "SURVIVED" else "KILLED"
+          },
+          error = function(e) {
+            err_msg <- tolower(conditionMessage(e))
+            if (grepl("reached elapsed time limit|reached cpu time limit", err_msg)) {
+              "HANG"
+            } else {
+              "KILLED"
+            }
+          }
+        )
+      },
       .progress = TRUE,
-      .options = furrr::furrr_options(seed = TRUE)
+      .options = furrr::furrr_options(
+        seed = TRUE,
+        globals = list(
+          run_tests = run_tests,
+          effective_timeout_seconds = effective_timeout_seconds
+        )
+      )
     )
   }
 
@@ -793,10 +864,17 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
 
     if (is.null(test_result) || length(test_result) == 0) {
       cat(sprintf("Mutant %s: Compilation/test execution failed, marking as KILLED.\n", mutant_id))
-      test_result <- FALSE
+      test_result <- "KILLED"
     }
 
-    status <- if (isTRUE(test_result)) "SURVIVED" else "KILLED"
+    status <- if (identical(test_result, "SURVIVED") || isTRUE(test_result)) {
+      "SURVIVED"
+    } else if (identical(test_result, "HANG")) {
+      "HANG"
+    } else {
+      "KILLED"
+    }
+
     mutation_info <- mutants[[mutant_id]]$info
 
     if (isFullLog) {
@@ -808,13 +886,15 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     package_mutants[[mutant_id]] <- list(
       path = pkg_copy_dir,
       mutation_info = mutation_info,
-      result = test_result
+      status = status
     )
-    test_results[[mutant_id]] <- test_result
+    test_results[[mutant_id]] <- status
   }
 
   # Filter survived mutants
-  survived_mutants <- package_mutants[unlist(test_results)]
+  survived_mutants <- package_mutants[vapply(package_mutants, function(m) {
+    identical(m$status, "SURVIVED")
+  }, logical(1))]
 
   # Initialize counters
   equivalent <- 0
@@ -853,8 +933,9 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
 
   # Summarize test results
   total_mutants <- length(test_results)
-  survived <- sum(unlist(test_results))
-  killed <- total_mutants - survived
+  survived <- sum(vapply(package_mutants, function(m) identical(m$status, "SURVIVED"), logical(1)))
+  killed <- sum(vapply(package_mutants, function(m) identical(m$status, "KILLED"), logical(1)))
+  hanged <- sum(vapply(package_mutants, function(m) identical(m$status, "HANG"), logical(1)))
 
   # Calculate equivalent mutants only if detectEqMutants is TRUE
   if (detectEqMutants) {
@@ -879,6 +960,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
   cat("\nMutation Testing Summary:\n")
   cat(sprintf("  Total mutants:    %d\n", total_mutants))
   cat(sprintf("  Killed:           %d\n", killed))
+  cat(sprintf("  Hanged:           %d\n", hanged))
   cat(sprintf("  Survived:         %d\n", survived))
 
   # Only print equivalent mutants and adjusted score if detectEqMutants is TRUE
