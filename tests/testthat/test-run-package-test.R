@@ -100,5 +100,5 @@ test_check(\"killpkg\")", file.path(pkg_dir, "tests", "testthat.R"))
   expect_true(is.list(result))
   expect_true(length(result$test_results) > 0)
   # At least one mutant should be killed
-  expect_true(any(vapply(result$test_results, isFALSE, logical(1))))
+  expect_true(any(vapply(result$test_results, function(x) identical(x, "KILLED"), logical(1))))
 })

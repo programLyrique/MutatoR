@@ -25,9 +25,25 @@ delete_line_mutants <- function(src_file,
     idx <- sample(valid_lines, 1)
     out_file <- file.path(out_dir, sprintf("%s_%03d.R", file_base, start_idx + i - 1))
     writeLines(lines[-idx], out_file)
+
+    deleted_text <- lines[idx]
+    if (length(deleted_text) == 0 || is.na(deleted_text) || !nzchar(deleted_text)) {
+      deleted_text <- NA_character_
+    }
+
     mutants[[i]] <- list(
       path = out_file,
-      info = sprintf("deleted line %d", idx)
+      info = list(
+        start_line = as.integer(idx),
+        start_col = 1L,
+        end_line = as.integer(idx),
+        end_col = 1L,
+        original_symbol = deleted_text,
+        new_symbol = NA_character_,
+        file_path = normalizePath(src_file, mustWork = FALSE),
+        mutation_type = "line_deletion",
+        deleted_line = as.integer(idx)
+      )
     )
   }
   mutants
@@ -290,8 +306,77 @@ get_openai_config <- function() {
 }
 # nocov end
 
+# Validate and normalize optional mutant cap argument.
+normalize_max_mutants <- function(max_mutants, arg = "max_mutants") {
+  if (is.null(max_mutants)) {
+    return(NULL)
+  }
+
+  if (!is.numeric(max_mutants) || length(max_mutants) != 1 || !is.finite(max_mutants)) {
+    stop(sprintf("`%s` must be a single finite numeric value.", arg), call. = FALSE)
+  }
+
+  if (max_mutants < 0 || max_mutants %% 1 != 0) {
+    stop(sprintf("`%s` must be a non-negative whole number.", arg), call. = FALSE)
+  }
+
+  as.integer(max_mutants)
+}
+
+format_mutation_info <- function(src_file, raw_info = NULL) {
+  file_path <- normalizePath(src_file, mustWork = FALSE)
+  if (is.list(raw_info) && !is.null(raw_info$file_path) && length(raw_info$file_path) > 0 &&
+    !is.na(raw_info$file_path[1]) && nzchar(raw_info$file_path[1])) {
+    file_path <- as.character(raw_info$file_path[1])
+  }
+
+  parts <- c(sprintf("File: %s", file_path))
+
+  if (is.list(raw_info) && !is.null(raw_info$start_line) && !is.null(raw_info$start_col) &&
+    !is.null(raw_info$end_line) && !is.null(raw_info$end_col)) {
+    start_line <- as.integer(raw_info$start_line)
+    start_col <- as.integer(raw_info$start_col)
+    end_line <- as.integer(raw_info$end_line)
+    end_col <- as.integer(raw_info$end_col)
+
+    parts <- c(parts, sprintf(
+      "Range: %d:%d-%d:%d",
+      start_line,
+      start_col,
+      end_line,
+      end_col
+    ))
+  }
+
+  if (is.list(raw_info)) {
+    if (!is.null(raw_info$mutation_type) &&
+      length(raw_info$mutation_type) > 0 &&
+      identical(as.character(raw_info$mutation_type[1]), "line_deletion") &&
+      !is.null(raw_info$deleted_line) &&
+      length(raw_info$deleted_line) > 0) {
+      parts <- c(parts, sprintf("Details: deleted line %d", as.integer(raw_info$deleted_line[1])))
+      return(paste(parts, collapse = "\n"))
+    }
+
+    original_symbol <- if (!is.null(raw_info$original_symbol) && length(raw_info$original_symbol) > 0) raw_info$original_symbol[1] else NA_character_
+    new_symbol <- if (!is.null(raw_info$new_symbol) && length(raw_info$new_symbol) > 0) raw_info$new_symbol[1] else NA_character_
+
+    if (!is.na(original_symbol) || !is.na(new_symbol)) {
+      new_label <- if (is.na(new_symbol)) "<deleted>" else new_symbol
+      old_label <- if (is.na(original_symbol)) "<unknown>" else original_symbol
+      parts <- c(parts, sprintf("Details: '%s' -> '%s'", old_label, new_label))
+    }
+  } else if (!is.null(raw_info) && nzchar(raw_info)) {
+    parts <- c(parts, sprintf("Details: %s", raw_info))
+  }
+
+  paste(parts, collapse = "\n")
+}
+
 # Generate AST-based and line-deletion mutants for a single R file
-mutate_file <- function(src_file, out_dir = "mutations") {
+mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL) {
+  max_mutants <- normalize_max_mutants(max_mutants)
+
   dir.create(out_dir, showWarnings = FALSE)
   options(keep.source = TRUE)
 
@@ -329,7 +414,7 @@ mutate_file <- function(src_file, out_dir = "mutations") {
     writeLines(paste(code, collapse = "\n"), out_file)
 
     info <- attr(m, "mutation_info")
-    if (is.null(info) || info == "") info <- "<no info>"
+    if (is.null(info) || (is.character(info) && length(info) == 1 && info == "")) info <- "<no info>"
 
     results[[length(results) + 1]] <- list(path = out_file, info = info)
     idx <- idx + 1L
@@ -344,13 +429,37 @@ mutate_file <- function(src_file, out_dir = "mutations") {
     )
   )
 
+  if (!is.null(max_mutants) && length(results) > max_mutants) {
+    results <- results[base::sample.int(length(results), max_mutants)]
+  }
+
+  for (i in seq_along(results)) {
+    results[[i]]$info <- format_mutation_info(
+      src_file = src_file,
+      raw_info = results[[i]]$info
+    )
+  }
+
   results
 }
 
 # High-level: mutate every R file in a package, run tests in parallel, and summarize
 mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
                            isFullLog = FALSE, detectEqMutants = FALSE,
-                           mutation_dir = NULL) {
+                           mutation_dir = NULL, max_mutants = NULL,
+                           timeout_seconds = NULL) {
+  timeout_multiplier <- 1.5
+  max_mutants <- normalize_max_mutants(max_mutants)
+  if (!is.null(timeout_seconds)) {
+    if (!is.numeric(timeout_seconds) || length(timeout_seconds) != 1 || !is.finite(timeout_seconds)) {
+      stop("`timeout_seconds` must be a single finite numeric value.", call. = FALSE)
+    }
+    if (timeout_seconds <= 0) {
+      stop("`timeout_seconds` must be greater than 0.", call. = FALSE)
+    }
+    timeout_seconds <- as.numeric(timeout_seconds)
+  }
+
   pkg_dir <- normalizePath(pkg_dir, mustWork = TRUE)
   if (is.null(mutation_dir)) {
     mutation_dir <- tempfile("mutations_")
@@ -360,20 +469,249 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     dir.create(mutation_dir, recursive = TRUE, showWarnings = FALSE)
   }
 
+  last_test_failure <- NULL
+
+  set_last_test_failure <- function(msg) {
+    last_test_failure <<- msg
+  }
+
+  # Detect test strategy once and reuse it for baseline and all mutants.
+  detect_test_strategy <- function(pkg_path) {
+    testthat_dir <- file.path(pkg_path, "tests", "testthat")
+    tests_dir <- file.path(pkg_path, "tests")
+
+    if (dir.exists(testthat_dir)) {
+      return("testthat")
+    }
+    if (dir.exists(tests_dir)) {
+      return("installed-tests")
+    }
+
+    stop(
+      "No supported tests found. Expected either 'tests/testthat' or a 'tests/' directory.",
+      call. = FALSE
+    )
+  }
+
+  get_package_name <- function(pkg_path) {
+    description_path <- file.path(pkg_path, "DESCRIPTION")
+    if (!file.exists(description_path)) {
+      stop("Cannot determine package name: DESCRIPTION file is missing.", call. = FALSE)
+    }
+    desc <- read.dcf(description_path)
+    if (!"Package" %in% colnames(desc)) {
+      stop("Cannot determine package name: DESCRIPTION has no 'Package' field.", call. = FALSE)
+    }
+    desc[1, "Package"]
+  }
+
+  run_testthat_tests <- function(pkg_path) {
+    set_last_test_failure(NULL)
+
+    if (requireNamespace("grDevices", quietly = TRUE)) {
+      while (grDevices::dev.cur() > 1) grDevices::dev.off()
+    }
+
+    old_wd <- getwd()
+    on.exit(
+      {
+        setwd(old_wd)
+        if (requireNamespace("grDevices", quietly = TRUE)) {
+          while (grDevices::dev.cur() > 1) grDevices::dev.off()
+        }
+      },
+      add = TRUE
+    )
+    setwd(pkg_path)
+
+    loaded <- tryCatch(
+      {
+        devtools::load_all(quiet = TRUE)
+        TRUE
+      },
+      error = function(e) {
+        set_last_test_failure(paste0("Package load failed: ", e$message))
+        message("Load error: ", e$message)
+        FALSE
+      }
+    )
+    if (!loaded) {
+      return(FALSE)
+    }
+
+    passed <- tryCatch(
+      {
+        tr <- testthat::test_dir("tests/testthat")
+        num_failed <- sum(tr$failed)
+        if (num_failed > 0) {
+          set_last_test_failure(sprintf("testthat reported %d failing test(s).", num_failed))
+        }
+        num_failed == 0
+      },
+      error = function(e) {
+        set_last_test_failure(paste0("testthat execution failed: ", e$message))
+        message("Test error: ", e$message)
+        FALSE
+      }
+    )
+
+    passed
+  }
+
+  run_installed_package_tests <- function(pkg_path) {
+    set_last_test_failure(NULL)
+
+    pkg_name <- tryCatch(
+      get_package_name(pkg_path),
+      error = function(e) {
+        set_last_test_failure(paste0("Cannot read package metadata: ", e$message))
+        message("Package metadata error: ", e$message)
+        NULL
+      }
+    )
+    if (is.null(pkg_name)) {
+      return(FALSE)
+    }
+
+    temp_lib <- tempfile("mutator_lib_")
+    temp_out <- tempfile("mutator_test_out_")
+    dir.create(temp_lib, recursive = TRUE, showWarnings = FALSE)
+    dir.create(temp_out, recursive = TRUE, showWarnings = FALSE)
+    on.exit(unlink(temp_lib, recursive = TRUE, force = TRUE), add = TRUE)
+    on.exit(unlink(temp_out, recursive = TRUE, force = TRUE), add = TRUE)
+
+    r_bin <- file.path(R.home("bin"), "R")
+    install_output <- tryCatch(
+      suppressWarnings(system2(
+        r_bin,
+        args = c(
+          "CMD", "INSTALL",
+          "--install-tests",
+          "--no-multiarch",
+          paste0("--library=", temp_lib),
+          pkg_path
+        ),
+        stdout = TRUE,
+        stderr = TRUE
+      )),
+      error = function(e) e
+    )
+
+    if (inherits(install_output, "error")) {
+      set_last_test_failure(paste0("Installation command failed: ", install_output$message))
+      message("Install error: ", install_output$message)
+      return(FALSE)
+    }
+
+    install_status <- attr(install_output, "status")
+    if (is.null(install_status)) {
+      install_status <- 0L
+    }
+    if (!identical(as.integer(install_status), 0L)) {
+      set_last_test_failure(
+        paste0(
+          "Installation failed for package '", pkg_name,
+          "'. Ensure runtime/test dependencies are installed and package sources are valid."
+        )
+      )
+      message("Install error while running fallback tests for package: ", pkg_name)
+      if (length(install_output) > 0) {
+        message(paste(utils::tail(install_output, 10), collapse = "\n"))
+      }
+      return(FALSE)
+    }
+
+    test_code <- tryCatch(
+      {
+        old_r_libs <- Sys.getenv("R_LIBS", unset = "")
+        on.exit(Sys.setenv(R_LIBS = old_r_libs), add = TRUE)
+
+        # Ensure subprocesses spawned by tools::testInstalledPackage can find
+        # the freshly installed package in the temporary library.
+        fallback_libs <- paste(c(temp_lib, .libPaths()), collapse = .Platform$path.sep)
+        Sys.setenv(R_LIBS = fallback_libs)
+
+        tools::testInstalledPackage(
+          pkg = pkg_name,
+          lib.loc = temp_lib,
+          outDir = temp_out,
+          types = "tests"
+        )
+      },
+      error = function(e) e
+    )
+
+    if (inherits(test_code, "error")) {
+      set_last_test_failure(paste0("tools::testInstalledPackage() failed: ", test_code$message))
+      message("Fallback test execution error: ", test_code$message)
+      return(FALSE)
+    }
+
+    passed <- identical(as.integer(test_code), 0L)
+    if (!passed) {
+      set_last_test_failure(
+        paste0(
+          "Installed package tests failed for '", pkg_name,
+          "'. Check files under tests/ and verify dependencies required by tests are available."
+        )
+      )
+    }
+
+    passed
+  }
+
+  test_strategy <- detect_test_strategy(pkg_dir)
+
+  run_tests <- function(pkg_path) {
+    if (identical(test_strategy, "testthat")) {
+      return(run_testthat_tests(pkg_path))
+    }
+    if (identical(test_strategy, "installed-tests")) {
+      return(run_installed_package_tests(pkg_path))
+    }
+    stop(sprintf("Unknown test strategy '%s'.", test_strategy), call. = FALSE)
+  }
+
+  baseline_elapsed_seconds <- NA_real_
+  effective_timeout_seconds <- NA_real_
+
   # Sanity check: verify the unmutated package can load and its tests pass
   baseline_ok <- tryCatch(
     {
-      tr <- devtools::test(pkg_dir, reporter = testthat::SilentReporter)
-      tr_df <- as.data.frame(tr)
-      if (sum(tr_df$failed) > 0) {
-        stop(sprintf("Baseline test suite has %d failure(s). Fix the tests before running mutation testing.",
-                      sum(tr_df$failed)))
+      baseline_timing <- system.time({
+        baseline_passed <- run_tests(pkg_dir)
+      })
+      baseline_elapsed_seconds <- unname(as.numeric(baseline_timing[["elapsed"]]))
+
+      if (!isTRUE(baseline_passed)) {
+        detail_msg <- if (is.null(last_test_failure)) {
+          "No additional details captured."
+        } else {
+          last_test_failure
+        }
+
+        strategy_hint <- if (identical(test_strategy, "installed-tests")) {
+          paste0(
+            " In fallback mode, MutatoR installs the package with '--install-tests' and runs ",
+            "tools::testInstalledPackage(..., types = 'tests')."
+          )
+        } else {
+          ""
+        }
+
+        stop(sprintf(
+          "Baseline test suite failed under strategy '%s'.\n  Details: %s%s",
+          test_strategy,
+          detail_msg,
+          strategy_hint
+        ))
       }
       TRUE
     },
     error = function(e) {
       stop(sprintf("Cannot run mutation testing: the unmutated package failed.\n  %s", e$message),
-           call. = FALSE)
+        call. = FALSE
+      )
     }
   )
 
@@ -433,74 +771,89 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     }
   }
 
-  run_tests <- function(pkg_dir) {
-    # Close any open graphics devices before running tests
-    if (requireNamespace("grDevices", quietly = TRUE)) {
-      while (grDevices::dev.cur() > 1) grDevices::dev.off()
-    }
-    old_wd <- getwd()
-    on.exit(
-      {
-        setwd(old_wd)
-        if (requireNamespace("grDevices", quietly = TRUE)) {
-          while (grDevices::dev.cur() > 1) grDevices::dev.off()
-        }
-      },
-      add = TRUE
-    )
-    setwd(pkg_dir)
-
-    loaded <- tryCatch(
-      {
-        devtools::load_all(quiet = TRUE)
-        TRUE
-      },
-      error = function(e) {
-        message("Load error: ", e$message)
-        FALSE
-      }
-    )
-    if (!loaded) {
-      return(FALSE)
-    }
-
-    passed <- tryCatch(
-      {
-        tr <- testthat::test_dir("tests/testthat")
-        num_failed <- sum(tr$failed)
-        num_failed == 0
-      },
-      error = function(e) {
-        message("Test error: ", e$message)
-        FALSE
-      }
-    )
-    passed
+  if (!is.null(max_mutants) && length(mutants) > max_mutants) {
+    selected_ids <- base::sample(names(mutants), max_mutants)
+    mutants <- mutants[selected_ids]
   }
-
 
   # options(
   #   future.devices.onMisuse = "warning",   # or "ignore"
   #   future.connections.onMisuse = "ignore" # similar check for open file‑conns
   # )
 
-  # Set up parallel processing
-  future::plan(future::multisession,
-    workers = min(cores, length(mutants))
-  )
-
   mutant_ids <- names(mutants)
-  pkg_dirs <- sapply(mutants, function(x) x$pkg)
-  pkg_dir_list <- as.list(pkg_dirs)
-  names(pkg_dir_list) <- mutant_ids
+  parallel_results <- list()
+  workers_to_use <- max(1, min(cores, max(1, length(mutants))))
 
-  # Run tests in parallel with progress bar
-  parallel_results <- furrr::future_map(
-    pkg_dir_list,
-    function(pkg) run_tests(pkg),
-    .progress = TRUE,
-    .options = furrr::furrr_options(seed = TRUE)
-  )
+  effective_timeout_seconds <- if (!is.null(timeout_seconds)) {
+    timeout_seconds
+  } else {
+    baseline_elapsed_seconds * timeout_multiplier
+  }
+
+  if (!is.finite(effective_timeout_seconds) || effective_timeout_seconds <= 0) {
+    stop("Could not derive a valid timeout from baseline execution.", call. = FALSE)
+  }
+
+  if (isFullLog) {
+    cat(sprintf(
+      "Baseline runtime: %.2fs | Mutant timeout: %.2fs (%s)\n",
+      baseline_elapsed_seconds,
+      effective_timeout_seconds,
+      if (is.null(timeout_seconds)) {
+        sprintf("baseline x %.2f", timeout_multiplier)
+      } else {
+        "explicit"
+      }
+    ))
+  }
+
+  if (length(mutants) > 0) {
+    # Set up parallel processing
+    future::plan(future::multisession,
+      workers = workers_to_use
+    )
+
+    pkg_dirs <- sapply(mutants, function(x) x$pkg)
+    pkg_dir_list <- as.list(pkg_dirs)
+    names(pkg_dir_list) <- mutant_ids
+
+    # Run tests in parallel with progress bar
+    parallel_results <- furrr::future_map(
+      pkg_dir_list,
+      function(pkg) {
+        tryCatch(
+          {
+            setTimeLimit(
+              cpu = effective_timeout_seconds,
+              elapsed = effective_timeout_seconds,
+              transient = TRUE
+            )
+            on.exit(setTimeLimit(cpu = Inf, elapsed = Inf, transient = FALSE), add = TRUE)
+
+            passed <- run_tests(pkg)
+            if (isTRUE(passed)) "SURVIVED" else "KILLED"
+          },
+          error = function(e) {
+            err_msg <- tolower(conditionMessage(e))
+            if (grepl("reached elapsed time limit|reached cpu time limit", err_msg)) {
+              "HANG"
+            } else {
+              "KILLED"
+            }
+          }
+        )
+      },
+      .progress = TRUE,
+      .options = furrr::furrr_options(
+        seed = TRUE,
+        globals = list(
+          run_tests = run_tests,
+          effective_timeout_seconds = effective_timeout_seconds
+        )
+      )
+    )
+  }
 
   # Process the parallel test results
   package_mutants <- list()
@@ -511,10 +864,17 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
 
     if (is.null(test_result) || length(test_result) == 0) {
       cat(sprintf("Mutant %s: Compilation/test execution failed, marking as KILLED.\n", mutant_id))
-      test_result <- FALSE
+      test_result <- "KILLED"
     }
 
-    status <- if (isTRUE(test_result)) "SURVIVED" else "KILLED"
+    status <- if (identical(test_result, "SURVIVED") || isTRUE(test_result)) {
+      "SURVIVED"
+    } else if (identical(test_result, "HANG")) {
+      "HANG"
+    } else {
+      "KILLED"
+    }
+
     mutation_info <- mutants[[mutant_id]]$info
 
     if (isFullLog) {
@@ -526,13 +886,15 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     package_mutants[[mutant_id]] <- list(
       path = pkg_copy_dir,
       mutation_info = mutation_info,
-      result = test_result
+      status = status
     )
-    test_results[[mutant_id]] <- test_result
+    test_results[[mutant_id]] <- status
   }
 
   # Filter survived mutants
-  survived_mutants <- package_mutants[unlist(test_results)]
+  survived_mutants <- package_mutants[vapply(package_mutants, function(m) {
+    identical(m$status, "SURVIVED")
+  }, logical(1))]
 
   # Initialize counters
   equivalent <- 0
@@ -571,8 +933,9 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
 
   # Summarize test results
   total_mutants <- length(test_results)
-  survived <- sum(unlist(test_results))
-  killed <- total_mutants - survived
+  survived <- sum(vapply(package_mutants, function(m) identical(m$status, "SURVIVED"), logical(1)))
+  killed <- sum(vapply(package_mutants, function(m) identical(m$status, "KILLED"), logical(1)))
+  hanged <- sum(vapply(package_mutants, function(m) identical(m$status, "HANG"), logical(1)))
 
   # Calculate equivalent mutants only if detectEqMutants is TRUE
   if (detectEqMutants) {
@@ -597,6 +960,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
   cat("\nMutation Testing Summary:\n")
   cat(sprintf("  Total mutants:    %d\n", total_mutants))
   cat(sprintf("  Killed:           %d\n", killed))
+  cat(sprintf("  Hanged:           %d\n", hanged))
   cat(sprintf("  Survived:         %d\n", survived))
 
   # Only print equivalent mutants and adjusted score if detectEqMutants is TRUE

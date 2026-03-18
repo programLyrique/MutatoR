@@ -10,7 +10,8 @@
 #include <Rinternals.h>
 
 // Class to Handle AST Traversal and Operator Gathering
-class ASTHandler {
+class ASTHandler
+{
 public:
     ASTHandler() = default;
     ~ASTHandler() = default;
@@ -23,9 +24,11 @@ private:
     int _start_col;
     int _end_line;
     int _end_col;
+    std::string _file_path;
     bool _is_inside_block;
+
     // Recursive helper function
-    void gatherOperatorsRecursive(SEXP expr, std::vector<int> path, std::vector<OperatorPos>& ops);
+    void gatherOperatorsRecursive(SEXP expr, std::vector<int> path, std::vector<OperatorPos> &ops);
 
     bool isDeletable(SEXP expr);
 };
