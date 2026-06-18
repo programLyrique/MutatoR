@@ -1,6 +1,6 @@
 test_that("mutate_package generates and tests mutants", {
   # Skip test if dependencies are not available
-  skip_if_not_installed("devtools")
+  skip_if_not_installed("pkgload")
   skip_if_not_installed("furrr")
   skip_if_not_installed("future")
 
@@ -63,7 +63,7 @@ test_check(\"%s\")", pkg_name, pkg_name), file.path(pkg_dir, "tests", "testthat.
 
 test_that("mutate_package links unchanged package content", {
   # Skip test if dependencies are not available
-  skip_if_not_installed("devtools")
+  skip_if_not_installed("pkgload")
   skip_if_not_installed("furrr")
   skip_if_not_installed("future")
   # Sys.readlink-based assertions are not reliable on Windows CI.
@@ -128,7 +128,7 @@ test_check(\"%s\")", pkg_name, pkg_name), file.path(pkg_dir, "tests", "testthat.
 })
 
 test_that("mutate_package fails fast when baseline tests fail", {
-  skip_if_not_installed("devtools")
+  skip_if_not_installed("pkgload")
   skip_if_not_installed("furrr")
   skip_if_not_installed("future")
 
@@ -166,7 +166,7 @@ License: MIT", pkg_name), file.path(pkg_dir, "DESCRIPTION"))
 })
 
 test_that("mutate_package supports non-testthat packages via installed tests fallback", {
-  skip_if_not_installed("devtools")
+  skip_if_not_installed("pkgload")
   skip_if_not_installed("furrr")
   skip_if_not_installed("future")
 
@@ -204,7 +204,7 @@ License: MIT", pkg_name), file.path(pkg_dir, "DESCRIPTION"))
 })
 
 test_that("mutate_package fails fast for fallback strategy when baseline tests fail", {
-  skip_if_not_installed("devtools")
+  skip_if_not_installed("pkgload")
   skip_if_not_installed("furrr")
   skip_if_not_installed("future")
 

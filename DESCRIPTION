@@ -17,10 +17,12 @@ Imports:
     jsonlite,
     httr,
     parallel,
-    devtools,
+    pkgload,
     testthat,
     future,
     furrr
+Suggests:
+    xml2
 LinkingTo:
     testthat
 Config/testthat/edition: 3

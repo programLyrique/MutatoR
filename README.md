@@ -35,7 +35,7 @@ mutator/
 
 ```r
 # Install dependencies
-install.packages(c("devtools", "testthat", "httr", "jsonlite", "future", "furrr"))
+install.packages(c("pkgload", "testthat", "httr", "jsonlite", "future", "furrr"))
 
 # Install from GitHub (if available)
 devtools::install_github("PRL-PRG/MutatoR")
@@ -161,8 +161,9 @@ mutator implements a wide range of mutation operators to thoroughly test your co
 mutator depends on:
 
 - **R Packages**:
-  - **devtools**: For package development utilities
+  - **pkgload**: For loading mutated package copies
   - **testthat**: For test execution
+  - **xml2**: For running C++ tests through `testthat::run_cpp_tests()`
   - **future** and **furrr**: For parallel execution
   - **httr** and **jsonlite**: For OpenAI API integration
 - **LinkingTo**: `testthat` (for Catch2 C++ test headers)

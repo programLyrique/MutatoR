@@ -336,7 +336,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
 
     loaded <- tryCatch(
       {
-        devtools::load_all(quiet = TRUE)
+        pkgload::load_all(quiet = TRUE)
         TRUE
       },
       error = function(e) {

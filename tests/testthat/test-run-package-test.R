@@ -1,6 +1,6 @@
 test_that("mutate_package returns results for a valid package", {
   # Skip test if dependencies are not available
-  skip_if_not_installed("devtools")
+  skip_if_not_installed("pkgload")
   skip_if_not_installed("furrr")
   skip_if_not_installed("future")
 
@@ -56,7 +56,7 @@ test_check(\"testpkg\")", file.path(pkg_dir, "tests", "testthat.R"))
 
 test_that("mutate_package marks mutants as killed when mutations break tests", {
   # Skip test if dependencies are not available
-  skip_if_not_installed("devtools")
+  skip_if_not_installed("pkgload")
   skip_if_not_installed("furrr")
   skip_if_not_installed("future")
 

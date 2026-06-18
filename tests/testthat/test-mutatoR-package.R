@@ -5,7 +5,7 @@ test_that("mutator works as a complete package", {
   skip_if(interactive() == FALSE, "Skipping full package test in non-interactive mode")
 
   # Skip test if dependencies are not available
-  skip_if_not_installed("devtools")
+  skip_if_not_installed("pkgload")
   skip_if_not_installed("furrr")
   skip_if_not_installed("future")
 

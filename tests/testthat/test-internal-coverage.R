@@ -152,7 +152,7 @@ test_that("C_mutate_file validates input types and srcref", {
 test_that("mutate_package supports a user-provided mutation_dir", {
     mutate_package <- resolve_mutator_fn("mutate_package")
 
-    skip_if_not_installed("devtools")
+    skip_if_not_installed("pkgload")
     skip_if_not_installed("furrr")
     skip_if_not_installed("future")
 
@@ -430,7 +430,7 @@ test_that("timeout parameter validation rejects invalid values", {
 test_that("mutate_package caps total mutants with max_mutants", {
     mutate_package <- resolve_mutator_fn("mutate_package")
 
-    skip_if_not_installed("devtools")
+    skip_if_not_installed("pkgload")
     skip_if_not_installed("furrr")
     skip_if_not_installed("future")
 
@@ -487,7 +487,7 @@ test_that("mutate_package caps total mutants with max_mutants", {
 test_that("mutate_package supports max_mutants set to zero", {
     mutate_package <- resolve_mutator_fn("mutate_package")
 
-    skip_if_not_installed("devtools")
+    skip_if_not_installed("pkgload")
     skip_if_not_installed("furrr")
     skip_if_not_installed("future")
 
