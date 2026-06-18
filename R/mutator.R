@@ -143,7 +143,8 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL) {
   max_mutants <- normalize_max_mutants(max_mutants)
 
   dir.create(out_dir, showWarnings = FALSE)
-  options(keep.source = TRUE)
+  old_options <- options(keep.source = TRUE)
+  on.exit(options(old_options), add = TRUE)
 
   parsed <- parse(src_file, keep.source = TRUE)
   if (is.null(attr(parsed, "srcref"))) {
@@ -619,6 +620,9 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
   }
 
   if (length(mutants) > 0) {
+    old_future_plan <- future::plan()
+    on.exit(future::plan(old_future_plan), add = TRUE)
+
     if (workers_to_use > 1) {
       future::plan(future::multisession,
         workers = workers_to_use
@@ -739,8 +743,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     }
   }
 
-  # Clean up the parallel workers
-  future::plan(future::sequential)
+  # Clean up transient resources before returning.
   gc() # Force garbage collection to clean up connections
 
   # Summarize test results
