@@ -15,3 +15,5 @@ cpp_tests/*.txt
 .openai_config.R
 ..Rcheck/*
 packages/
+mutator.Rcheck
+*tar.gz

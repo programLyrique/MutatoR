@@ -67,9 +67,28 @@ extern "C" SEXP C_mutate_single(SEXP expr_sexp, SEXP src_ref_sexp, bool is_insid
 
 static bool isValidMutant(SEXP mutant)
 {
+    int n_protected = 0;
     int error = 0;
-    R_tryEval(mutant, R_GlobalEnv, &error);
-    return error == 0;
+
+    SEXP deparse_call = PROTECT(Rf_lang2(Rf_install("deparse"), mutant));
+    ++n_protected;
+
+    SEXP text = R_tryEval(deparse_call, R_BaseEnv, &error);
+    if (error != 0 || TYPEOF(text) != STRSXP) {
+        UNPROTECT(n_protected);
+        return false;
+    }
+
+    PROTECT(text);
+    ++n_protected;
+
+    ParseStatus status;
+    SEXP parsed = PROTECT(R_ParseVector(text, -1, &status, R_NilValue));
+    ++n_protected;
+
+    bool valid = status == PARSE_OK && TYPEOF(parsed) == EXPRSXP;
+    UNPROTECT(n_protected);
+    return valid;
 }
 
 std::vector<bool> detect_block_expressions(SEXP exprs, int n_expr) {
@@ -177,4 +196,3 @@ extern "C" SEXP C_mutate_file(SEXP exprs)
     UNPROTECT(n_protected);   // drops all temporaries but keeps res reachable
     return res;
 }
-
