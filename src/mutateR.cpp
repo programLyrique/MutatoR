@@ -135,7 +135,8 @@ extern "C" SEXP C_mutate_file(SEXP exprs)
         SEXP cur_expr     = VECTOR_ELT(exprs, i);
         SEXP cur_src_ref  = VECTOR_ELT(src_ref, i);
 
-        SEXP cur_mutants  = C_mutate_single(cur_expr, cur_src_ref, inside_block[i]);
+        SEXP cur_mutants  = PROTECT(C_mutate_single(cur_expr, cur_src_ref, inside_block[i]));
+        ++n_protected;
         if (TYPEOF(cur_mutants) != VECSXP)
             Rf_error("C_mutate_single did not return a list for expression %d.", i);
 
@@ -161,6 +162,9 @@ extern "C" SEXP C_mutate_file(SEXP exprs)
                 UNPROTECT(1); --n_protected;       // discard invalid mutant
             }
         }
+
+        UNPROTECT(1);
+        --n_protected;
     }
 
     // Build the final R list
