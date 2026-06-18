@@ -128,3 +128,17 @@ test_that("C_mutate_file generates all operator mutants for a single expression"
   expect_length(mutants, 3)
   expect_equal(sort(unique(symbols)), c("*", "+", "-"))
 })
+
+test_that("C_mutate_single accepts a logical flag through .Call", {
+  exprs <- parse(text = "1 + 2", keep.source = TRUE)
+  srcref <- attr(exprs, "srcref")[[1]]
+
+  mutants <- .Call("C_mutate_single", exprs, srcref, FALSE, PACKAGE = "mutator")
+
+  expect_type(mutants, "list")
+  expect_true(length(mutants) >= 1)
+  expect_error(
+    .Call("C_mutate_single", exprs, srcref, NA, PACKAGE = "mutator"),
+    "is_inside_block"
+  )
+})

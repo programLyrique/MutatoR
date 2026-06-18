@@ -22,7 +22,7 @@
 #include "Mutator.h"
 #include <vector>
 
-extern "C" SEXP C_mutate_single(SEXP expr_sexp, SEXP src_ref_sexp, bool is_inside_block)
+static SEXP mutate_single(SEXP expr_sexp, SEXP src_ref_sexp, bool is_inside_block)
 {
     if (TYPEOF(expr_sexp) == EXPRSXP) {
         if (Rf_length(expr_sexp) == 0)
@@ -63,6 +63,16 @@ extern "C" SEXP C_mutate_single(SEXP expr_sexp, SEXP src_ref_sexp, bool is_insid
     // UNPROTECT(n_protected);   // res is now reachable from R, others are inside res
     UNPROTECT(1 + m);         // res + every mutant
     return res;
+}
+
+extern "C" SEXP C_mutate_single(SEXP expr_sexp, SEXP src_ref_sexp, SEXP is_inside_block_sexp)
+{
+    int is_inside_block = Rf_asLogical(is_inside_block_sexp);
+    if (is_inside_block == NA_LOGICAL) {
+        Rf_error("`is_inside_block` must be TRUE or FALSE.");
+    }
+
+    return mutate_single(expr_sexp, src_ref_sexp, is_inside_block != 0);
 }
 
 static bool isValidMutant(SEXP mutant)
@@ -154,7 +164,7 @@ extern "C" SEXP C_mutate_file(SEXP exprs)
         SEXP cur_expr     = VECTOR_ELT(exprs, i);
         SEXP cur_src_ref  = VECTOR_ELT(src_ref, i);
 
-        SEXP cur_mutants  = PROTECT(C_mutate_single(cur_expr, cur_src_ref, inside_block[i]));
+        SEXP cur_mutants  = PROTECT(mutate_single(cur_expr, cur_src_ref, inside_block[i]));
         ++n_protected;
         if (TYPEOF(cur_mutants) != VECSXP)
             Rf_error("C_mutate_single did not return a list for expression %d.", i);
