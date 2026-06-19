@@ -58,10 +58,23 @@ static bool extractSrcrefBounds(SEXP srcref, int &start_line, int &start_col, in
     if (TYPEOF(srcref) != INTSXP || LENGTH(srcref) < 4)
         return false;
     const int *p = INTEGER(srcref);
+    const int n = LENGTH(srcref);
     start_line = p[0];
-    start_col = p[1];
     end_line = p[2];
-    end_col = p[3];
+    // An R srcref is (first_line, first_byte, last_line, last_byte,
+    // first_column, last_column, ...). Report character columns (indices 4/5)
+    // when present; the short 4-element form carries no column information, so
+    // fall back to the byte offsets (indices 1/3) as the best approximation.
+    if (n >= 6)
+    {
+        start_col = p[4];
+        end_col = p[5];
+    }
+    else
+    {
+        start_col = p[1];
+        end_col = p[3];
+    }
     return true;
 }
 
@@ -76,14 +89,9 @@ bool ASTHandler::isDeletableStatement(SEXP stmt)
 std::vector<OperatorPos> ASTHandler::gatherOperators(SEXP expr, SEXP src_ref,
                                                      bool is_inside_block)
 {
-    if (TYPEOF(src_ref) != INTSXP || LENGTH(src_ref) < 4)
-        Rf_error("src_ref must be an integer vector of length 4");
+    if (!extractSrcrefBounds(src_ref, _start_line, _start_col, _end_line, _end_col))
+        Rf_error("src_ref must be an integer vector of length >= 4");
 
-    const int *p = INTEGER(src_ref);
-    _start_line = p[0];
-    _start_col = p[1];
-    _end_line = p[2];
-    _end_col = p[3];
     _file_path.clear();
 
     SEXP srcfile = Rf_getAttrib(src_ref, Rf_install("srcfile"));
