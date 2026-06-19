@@ -20,18 +20,26 @@ delete_line_mutants <- function(src_file,
     return(list())
   }
 
-  mutants <- vector("list", count)
-  for (i in seq_len(count)) {
-    idx <- sample(valid_lines, 1)
-    out_file <- file.path(out_dir, sprintf("%s_%03d.R", file_base, start_idx + i - 1))
+  mutants <- list()
+  candidate_lines <- sample(valid_lines)
+  for (idx in candidate_lines) {
+    if (length(mutants) >= count) {
+      break
+    }
+
+    out_file <- file.path(out_dir, sprintf("%s_%03d.R", file_base, start_idx + length(mutants)))
     writeLines(lines[-idx], out_file)
+    if (inherits(try(parse(out_file), silent = TRUE), "try-error")) {
+      unlink(out_file)
+      next
+    }
 
     deleted_text <- lines[idx]
     if (length(deleted_text) == 0 || is.na(deleted_text) || !nzchar(deleted_text)) {
       deleted_text <- NA_character_
     }
 
-    mutants[[i]] <- list(
+    mutants[[length(mutants) + 1L]] <- list(
       path = out_file,
       info = list(
         start_line = as.integer(idx),
