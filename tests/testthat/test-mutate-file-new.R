@@ -129,6 +129,17 @@ test_that("C_mutate_file generates all operator mutants for a single expression"
   expect_equal(sort(unique(symbols)), c("*", "+", "-"))
 })
 
+test_that("C_mutate_file keeps accumulated mutants alive across expressions", {
+  code <- paste(sprintf("x%d <- %d + %d", 1:80, 1:80, 1:80), collapse = "\n")
+  exprs <- parse(text = code, keep.source = TRUE)
+
+  mutants <- .Call("C_mutate_file", exprs, PACKAGE = "mutator")
+
+  expect_length(mutants, 80)
+  invisible(gc())
+  expect_true(all(vapply(mutants, is.expression, logical(1))))
+})
+
 test_that("C_mutate_single accepts a logical flag through .Call", {
   exprs <- parse(text = "1 + 2", keep.source = TRUE)
   srcref <- attr(exprs, "srcref")[[1]]

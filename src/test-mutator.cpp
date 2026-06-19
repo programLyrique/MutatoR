@@ -85,7 +85,7 @@ context("Mutator C++ tests")
     {
         SEXP expr = PROTECT(Rf_lang3(Rf_install("+"), Rf_install("a"), Rf_install("b")));
         std::vector<OperatorPos> ops;
-        ops.push_back(OperatorPos({0}, std::make_unique<DeleteOperator>(expr), 1, 1, 1, 5, expr));
+        ops.push_back(OperatorPos({}, std::make_unique<DeleteOperator>(expr), 1, 1, 1, 5, expr));
 
         Mutator mutator;
         auto result = mutator.applyDeleteMutation(expr, ops, 0);
@@ -95,7 +95,26 @@ context("Mutator C++ tests")
         UNPROTECT(1);
     }
 
-    test_that("applyDeleteMutation succeeds for removable argument path")
+    test_that("applyDeleteMutation removes the first argument for path index zero")
+    {
+        SEXP expr = PROTECT(Rf_lang3(Rf_install("+"), Rf_install("a"), Rf_install("b")));
+        std::vector<OperatorPos> ops;
+        ops.push_back(OperatorPos({0}, std::make_unique<DeleteOperator>(expr), 1, 1, 1, 5, expr));
+
+        Mutator mutator;
+        auto result = mutator.applyDeleteMutation(expr, ops, 0);
+
+        expect_true(result.second == true);
+        expect_true(TYPEOF(result.first) == LANGSXP);
+        expect_true(CAR(CDR(result.first)) == Rf_install("b"));
+        expect_true(CDDR(result.first) == R_NilValue);
+        expect_true(Rf_getAttrib(result.first, Rf_install("mutation_info")) != R_NilValue);
+        if (result.second && result.first != R_NilValue)
+            UNPROTECT(1);
+        UNPROTECT(1);
+    }
+
+    test_that("applyDeleteMutation removes the second argument for path index one")
     {
         SEXP expr = PROTECT(Rf_lang3(Rf_install("+"), Rf_install("a"), Rf_install("b")));
         std::vector<OperatorPos> ops;
@@ -106,10 +125,36 @@ context("Mutator C++ tests")
 
         expect_true(result.second == true);
         expect_true(TYPEOF(result.first) == LANGSXP);
+        expect_true(CAR(CDR(result.first)) == Rf_install("a"));
+        expect_true(CDDR(result.first) == R_NilValue);
         expect_true(Rf_getAttrib(result.first, Rf_install("mutation_info")) != R_NilValue);
         if (result.second && result.first != R_NilValue)
             UNPROTECT(1);
         UNPROTECT(1);
+    }
+
+    test_that("applyDeleteMutation uses zero-based CDR paths for nested calls")
+    {
+        SEXP inner = PROTECT(Rf_lang3(Rf_install("g"), Rf_install("a"), Rf_install("b")));
+        SEXP expr = PROTECT(Rf_lang3(Rf_install("f"), inner, Rf_install("c")));
+        std::vector<OperatorPos> ops;
+        ops.push_back(OperatorPos({0, 1}, std::make_unique<DeleteOperator>(inner), 1, 1, 1, 5, inner));
+
+        Mutator mutator;
+        auto result = mutator.applyDeleteMutation(expr, ops, 0);
+
+        expect_true(result.second == true);
+        expect_true(TYPEOF(result.first) == LANGSXP);
+
+        SEXP mutated_inner = CAR(CDR(result.first));
+        expect_true(TYPEOF(mutated_inner) == LANGSXP);
+        expect_true(CAR(mutated_inner) == Rf_install("g"));
+        expect_true(CAR(CDR(mutated_inner)) == Rf_install("a"));
+        expect_true(CDDR(mutated_inner) == R_NilValue);
+
+        if (result.second && result.first != R_NilValue)
+            UNPROTECT(1);
+        UNPROTECT(2);
     }
 
     test_that("applyMutation flips each supported operator")

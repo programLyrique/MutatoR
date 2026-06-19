@@ -105,22 +105,35 @@ std::pair<SEXP, bool> Mutator::applyFlipMutation(SEXP expr, const std::vector<Op
     SEXP node = mutated;
     for (int idx : pos.path)
     {
-        if (node == R_NilValue || CDR(node) == R_NilValue)
+        if (idx < 0 || node == R_NilValue || TYPEOF(node) != LANGSXP)
         {
             UNPROTECT(1);
             return {R_NilValue, false};
         }
+
         SEXP nxt = CDR(node);
         for (int j = 0; j < idx; ++j)
         {
-            nxt = CDR(nxt);
             if (nxt == R_NilValue)
             {
                 UNPROTECT(1);
                 return {R_NilValue, false};
             }
+            nxt = CDR(nxt);
+        }
+
+        if (nxt == R_NilValue)
+        {
+            UNPROTECT(1);
+            return {R_NilValue, false};
         }
         node = CAR(nxt);
+    }
+
+    if (node == R_NilValue || TYPEOF(node) != LANGSXP)
+    {
+        UNPROTECT(1);
+        return {R_NilValue, false};
     }
 
     // perform the operator‑specific flip
@@ -143,64 +156,78 @@ std::pair<SEXP, bool> Mutator::applyDeleteMutation(SEXP expr, const std::vector<
         UNPROTECT(1);
         return {R_NilValue, false};
     }
-    if (path.size() == 1 && path[0] == 0)
-    {
-        UNPROTECT(1);
-        return {R_NilValue, false};
-    }
 
     // navigate to parent SEXP that owns the element to delete
     SEXP parent = dup;
     for (size_t i = 0; i + 1 < path.size(); ++i)
     {
         int idx = path[i];
-        if (parent == R_NilValue || TYPEOF(parent) != LANGSXP)
+        if (idx < 0 || parent == R_NilValue || TYPEOF(parent) != LANGSXP)
         {
             UNPROTECT(1);
             return {R_NilValue, false};
         }
-        SEXP iter = parent;
+        SEXP iter = CDR(parent);
         for (int j = 0; j < idx; ++j)
         {
-            iter = CDR(iter);
             if (iter == R_NilValue)
             {
                 UNPROTECT(1);
                 return {R_NilValue, false};
             }
+            iter = CDR(iter);
+        }
+        if (iter == R_NilValue)
+        {
+            UNPROTECT(1);
+            return {R_NilValue, false};
         }
         parent = CAR(iter);
     }
 
     int delIdx = path.back();
-    if (delIdx == 0)
+    if (delIdx < 0 || parent == R_NilValue || TYPEOF(parent) != LANGSXP)
     {
         UNPROTECT(1);
         return {R_NilValue, false};
     }
 
-    // move to the cons cell *before* the one to remove
-    SEXP prev = parent;
-    for (int i = 0; i < delIdx - 1; ++i)
+    SEXP args = CDR(parent);
+    if (args == R_NilValue)
     {
-        prev = CDR(prev);
-        if (prev == R_NilValue)
+        UNPROTECT(1);
+        return {R_NilValue, false};
+    }
+
+    if (delIdx == 0)
+    {
+        SETCDR(parent, CDR(args));
+    }
+    else
+    {
+        // Move to the argument cons cell immediately before the one to remove.
+        SEXP prev = args;
+        for (int i = 0; i < delIdx - 1; ++i)
+        {
+            if (prev == R_NilValue)
+            {
+                UNPROTECT(1);
+                return {R_NilValue, false};
+            }
+            prev = CDR(prev);
+        }
+
+        if (prev == R_NilValue || CDR(prev) == R_NilValue)
         {
             UNPROTECT(1);
             return {R_NilValue, false};
         }
-    }
-
-    if (CDR(prev) != R_NilValue)
-    {
         SETCDR(prev, CDDR(prev)); // skip over the element to delete
-
-        // attach structured mutation_info
-        SEXP info = PROTECT(buildMutationInfo(pos, R_NilValue)); // [1]
-        Rf_setAttrib(dup, Rf_install("mutation_info"), info);
-        UNPROTECT(1); // drop info, dup still protected
-        return {dup, true};
     }
-    UNPROTECT(1); // drop dup – nothing deleted
-    return {R_NilValue, false};
+
+    // attach structured mutation_info
+    SEXP info = PROTECT(buildMutationInfo(pos, R_NilValue)); // [1]
+    Rf_setAttrib(dup, Rf_install("mutation_info"), info);
+    UNPROTECT(1); // drop info, dup still protected
+    return {dup, true};
 }

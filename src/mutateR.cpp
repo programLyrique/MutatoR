@@ -156,7 +156,6 @@ extern "C" SEXP C_mutate_file(SEXP exprs)
     const int n_expr = Rf_length(exprs);
     std::vector<bool> inside_block = detect_block_expressions(exprs, n_expr);
 
-    // we will collect *protected* mutants and unprotect them after transferring
     std::vector<SEXP> valid_mutants;
     int n_protected = 0;
 
@@ -185,11 +184,13 @@ extern "C" SEXP C_mutate_file(SEXP exprs)
             }
             Rf_setAttrib(file_mut, Rf_install("mutation_info"), mut_info);
 
-            if (isValidMutant(file_mut))
-                valid_mutants.push_back(file_mut); // still protected
-            else {
-                UNPROTECT(1); --n_protected;       // discard invalid mutant
+            if (isValidMutant(file_mut)) {
+                R_PreserveObject(file_mut);
+                valid_mutants.push_back(file_mut);
             }
+
+            UNPROTECT(1);
+            --n_protected;
         }
 
         UNPROTECT(1);
@@ -203,6 +204,9 @@ extern "C" SEXP C_mutate_file(SEXP exprs)
     for (R_xlen_t i = 0; i < n_valid; ++i)
         SET_VECTOR_ELT(res, i, valid_mutants[i]);
 
-    UNPROTECT(n_protected);   // drops all temporaries but keeps res reachable
+    for (SEXP mut : valid_mutants)
+        R_ReleaseObject(mut);
+
+    UNPROTECT(n_protected);   // drops res but keeps it reachable as the return value
     return res;
 }
