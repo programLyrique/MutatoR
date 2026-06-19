@@ -594,3 +594,78 @@ test_that("mutate_package supports max_mutants set to zero", {
     expect_equal(result$test_results, list())
     expect_equal(result$package_mutants, list())
 })
+
+test_that("detectEqMutants runs the real equivalence workflow for underscore filenames", {
+    # Regression test: the source file backing a survived mutant used to be
+    # recovered with strsplit(id, "_")[[1]][1], which mangles any name
+    # containing '_' (e.g. my_abs.R -> "my"). identify_equivalent_mutants then
+    # tried to readLines("<pkg>/R/my") and errored. Here we exercise the real
+    # workflow (only the network call is stubbed) to lock in the fix.
+    mutate_package <- resolve_mutator_fn("mutate_package")
+
+    skip_if_not_installed("pkgload")
+    skip_if_not_installed("furrr")
+    skip_if_not_installed("future")
+
+    pkg_info <- create_test_package("testMutatoREquivReal") # ships R/my_abs.R
+    on.exit(cleanup_test_package(pkg_info), add = TRUE)
+
+    mutation_dir <- tempfile("mutations_eq_real_")
+    dir.create(mutation_dir, recursive = TRUE)
+    on.exit(unlink(mutation_dir, recursive = TRUE), add = TRUE)
+
+    # A mutant identical to the original survives the test suite.
+    mut_path <- file.path(mutation_dir, "my_abs.R_001.R")
+    writeLines(c(
+        "my_abs <- function(x) {",
+        "  if (x < 0) {",
+        "    return(-x)",
+        "  }",
+        "  return(x)",
+        "}"
+    ), mut_path)
+
+    # The mutant id mirrors how mutate_package builds it: <src>_<mutant file>.
+    expected_id <- paste("my_abs.R", basename(mut_path), sep = "_")
+
+    # Make get_openai_config() return a non-empty key so the workflow proceeds
+    # past its early return, without touching the real environment/config files.
+    old_key <- Sys.getenv("OPENAI_API_KEY", unset = NA_character_)
+    on.exit(
+        if (is.na(old_key)) Sys.unsetenv("OPENAI_API_KEY") else Sys.setenv(OPENAI_API_KEY = old_key),
+        add = TRUE
+    )
+    Sys.setenv(OPENAI_API_KEY = "test-key")
+
+    testthat::local_mocked_bindings(
+        mutate_file = function(...) {
+            list(list(path = mut_path, info = "identity mutant"))
+        },
+        # Stub only the network call; identify_equivalent_mutants (incl. the
+        # readLines(src_file) that used to crash) runs for real.
+        call_openai_api = function(prompt, config) {
+            list(choices = list(list(message = list(
+                content = paste0("Mutant ", expected_id, ": EQUIVALENT")
+            ))))
+        },
+        .package = "mutator"
+    )
+
+    result <- mutate_package(
+        pkg_dir = pkg_info$pkg_dir,
+        cores = 1,
+        detectEqMutants = TRUE,
+        mutation_dir = mutation_dir
+    )
+
+    # Completing at all is the core regression assertion.
+    expect_true(is.list(result))
+    expect_true(expected_id %in% names(result$package_mutants))
+
+    mutant <- result$package_mutants[[expected_id]]
+    expect_equal(mutant$status, "SURVIVED")
+    # The equivalence verdict was attached, proving the correct source file was
+    # read and the survived mutant was matched back to it.
+    expect_true(isTRUE(mutant$equivalent))
+    expect_equal(mutant$equivalence_status, "EQUIVALENT")
+})

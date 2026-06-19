@@ -587,7 +587,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
       )
 
       id <- paste(basename(src), basename(m$path), sep = "_")
-      mutants[[id]] <- list(pkg = pkg_copy, info = m$info)
+      mutants[[id]] <- list(pkg = pkg_copy, info = m$info, src = src)
     }
   }
 
@@ -734,7 +734,8 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     package_mutants[[mutant_id]] <- list(
       path = pkg_copy_dir,
       mutation_info = mutation_info,
-      status = status
+      status = status,
+      src = mutants[[mutant_id]]$src
     )
     test_results[[mutant_id]] <- status
   }
@@ -752,16 +753,19 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
   # Identify equivalent mutants among survived mutants only if detectEqMutants is TRUE
   if (detectEqMutants && length(survived_mutants) > 0) {
     cat("\nAnalyzing equivalent mutants among survived mutants...\n")
-    # Get the original source files for survived mutants
-    src_files <- unique(sapply(names(survived_mutants), function(id) {
-      file_name <- strsplit(id, "_")[[1]][1]
-      file.path(pkg_dir, "R", file_name)
-    }))
+    # Group survived mutants by their originating source file. The source path
+    # is carried on each mutant record, so we never have to recover it from the
+    # mutant ID (filenames frequently contain '_' and '.').
+    src_files <- unique(vapply(survived_mutants, function(m) m$src, character(1)))
 
     # Process each source file
     for (src_file in src_files) {
       # Get mutants for this source file
-      file_mutants <- survived_mutants[grep(basename(src_file), names(survived_mutants))]
+      file_mutants <- survived_mutants[vapply(
+        survived_mutants,
+        function(m) identical(m$src, src_file),
+        logical(1)
+      )]
       if (length(file_mutants) > 0) {
         file_mutants <- identify_equivalent_mutants(src_file, file_mutants)
         # Update the main package_mutants list with equivalence information

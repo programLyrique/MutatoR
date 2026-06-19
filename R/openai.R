@@ -36,15 +36,11 @@ identify_equivalent_mutants <- function(src_file, survived_mutants, api_config =
     # Read original source code
     orig_code <- paste(readLines(src_file), collapse = "\n")
 
-    # Group mutants by source file
+    # Every mutant passed in is compared against this single `src_file`, so they
+    # form one group. Keying by `basename(src_file)` avoids recovering the file
+    # name from the mutant ID (which is unreliable: filenames contain '_').
     mutants_by_file <- list()
-    for (id in names(survived_mutants)) {
-        file_name <- strsplit(id, "_")[[1]][1]
-        if (is.null(mutants_by_file[[file_name]])) {
-            mutants_by_file[[file_name]] <- list()
-        }
-        mutants_by_file[[file_name]][[id]] <- survived_mutants[[id]]
-    }
+    mutants_by_file[[basename(src_file)]] <- survived_mutants
 
     # Track counts for each category
     equiv_count <- 0
