@@ -101,49 +101,6 @@ static bool isValidMutant(SEXP mutant)
     return valid;
 }
 
-std::vector<bool> detect_block_expressions(SEXP exprs, int n_expr) {
-    std::vector<bool> block_flags(n_expr, false);
-    std::vector<bool> in_block_stack;  // Stack to track nested blocks
-    
-    for (int i = 0; i < n_expr; i++) {
-        SEXP expr = VECTOR_ELT(exprs, i);
-        
-        // Check if the expression is a call (language object)
-        if (TYPEOF(expr) == LANGSXP) {
-            SEXP head = CAR(expr);
-            if (TYPEOF(head) == SYMSXP) {
-                std::string op_name = CHAR(PRINTNAME(head));
-                if (op_name == "{") {
-                    // Start of a new block
-                    in_block_stack.push_back(true);
-                    
-                    // Process expressions inside this block
-                    SEXP block_body = CDR(expr);
-                    while (block_body != R_NilValue) {
-                        block_flags[i] = true;
-                        block_body = CDR(block_body);
-                    }
-                } else if (op_name == "}") {
-                    // End of current block
-                    if (!in_block_stack.empty()) {
-                        in_block_stack.pop_back();
-                    }
-                } else if (!in_block_stack.empty()) {
-                    // We're inside at least one block
-                    block_flags[i] = true;
-                }
-            }
-        }
-        
-        // Mark expression as in block if we're inside any block
-        if (!in_block_stack.empty()) {
-            block_flags[i] = true;
-        }
-    }
-    
-    return block_flags;
-}
-
 extern "C" SEXP C_mutate_file(SEXP exprs)
 {
     if (TYPEOF(exprs) != EXPRSXP)
@@ -154,7 +111,6 @@ extern "C" SEXP C_mutate_file(SEXP exprs)
         Rf_error("'srcref' attribute missing or malformed.");
 
     const int n_expr = Rf_length(exprs);
-    std::vector<bool> inside_block = detect_block_expressions(exprs, n_expr);
 
     std::vector<SEXP> valid_mutants;
     int n_protected = 0;
@@ -163,7 +119,10 @@ extern "C" SEXP C_mutate_file(SEXP exprs)
         SEXP cur_expr     = VECTOR_ELT(exprs, i);
         SEXP cur_src_ref  = VECTOR_ELT(src_ref, i);
 
-        SEXP cur_mutants  = PROTECT(mutate_single(cur_expr, cur_src_ref, inside_block[i]));
+        // Each entry is a top-level expression, so it is never itself a
+        // statement inside a `{ }` block. Block nesting (and the statement
+        // deletions it enables) is discovered as the AST is traversed.
+        SEXP cur_mutants  = PROTECT(mutate_single(cur_expr, cur_src_ref, false));
         ++n_protected;
         if (TYPEOF(cur_mutants) != VECSXP)
             Rf_error("C_mutate_single did not return a list for expression %d.", i);

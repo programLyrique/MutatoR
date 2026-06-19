@@ -25,12 +25,12 @@ private:
     int _end_line;
     int _end_col;
     std::string _file_path;
-    bool _is_inside_block;
 
-    // Recursive helper function
+    // Recursive helper function. Block nesting is tracked intrinsically during
+    // traversal: a node is a deletable statement iff its parent is a `{ }` block.
     void gatherOperatorsRecursive(SEXP expr, std::vector<int> path, std::vector<OperatorPos> &ops);
 
-    bool isDeletable(SEXP expr);
+    static bool isDeletableStatement(SEXP stmt);
 };
 
 #endif // AST_HANDLER_H

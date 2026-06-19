@@ -65,17 +65,12 @@ static bool extractSrcrefBounds(SEXP srcref, int &start_line, int &start_col, in
     return true;
 }
 
-bool ASTHandler::isDeletable(SEXP expr)
+bool ASTHandler::isDeletableStatement(SEXP stmt)
 {
-    if (!_is_inside_block)
-        return false;
-    if (TYPEOF(expr) != LANGSXP)
-        return true;
-
-    SEXP head = CAR(expr);
-    if (TYPEOF(head) == SYMSXP && (head == SYM.s_lbrace || head == SYM.s_rbrace))
-        return false;
-    return true;
+    // Any genuine statement of a `{ }` block can be removed. Anything that does
+    // not survive a deparse/re-parse round-trip is discarded downstream, so we
+    // do not need to second-guess individual statement kinds here.
+    return stmt != R_NilValue;
 }
 
 std::vector<OperatorPos> ASTHandler::gatherOperators(SEXP expr, SEXP src_ref,
@@ -109,7 +104,7 @@ std::vector<OperatorPos> ASTHandler::gatherOperators(SEXP expr, SEXP src_ref,
         }
     }
 
-    _is_inside_block = is_inside_block;
+    (void)is_inside_block; // block nesting is now detected during traversal
 
     std::vector<OperatorPos> ops;
     std::vector<int> path;
@@ -175,20 +170,55 @@ void ASTHandler::gatherOperatorsRecursive(SEXP expr, std::vector<int> path,
                        node_end_line, node_end_col, fun, _file_path});
     }
 
-    // add delete operator if allowed
-    if (isDeletable(expr))
+    // A `{ ... }` block exposes each of its direct children as a statement that
+    // can be deleted. Detecting this here -- rather than via a single whole-tree
+    // flag -- means deletion is offered for real block statements at any nesting
+    // depth, and never for sub-expressions such as an operand of `+`.
+    const bool this_is_block =
+        (TYPEOF(fun) == SYMSXP && fun == SYM.s_lbrace);
+
+    // R does not attach a "srcref" to individual statement language objects.
+    // For a `{ }` block it instead stores a *list* of per-statement srcrefs as
+    // the block's own "srcref" attribute, in statement order. That list is the
+    // only precise source location for a statement (a statement's own bounds,
+    // when present at all, are frequently as wide as the surrounding block), so
+    // we index into it rather than reading the child's attribute.
+    SEXP block_srcrefs = R_NilValue;
+    if (this_is_block)
     {
-        auto del = std::make_unique<DeleteOperator>(expr);
-        ops.push_back({path, std::move(del), node_start_line, node_start_col,
-                       node_end_line, node_end_col, fun, _file_path});
+        SEXP sr = Rf_getAttrib(expr, SYM.s_srcref);
+        if (TYPEOF(sr) == VECSXP)
+            block_srcrefs = sr;
     }
 
-    // recurse into children (block or not)
     int idx = 0;
     for (SEXP next = CDR(expr); next != R_NilValue; next = CDR(next), ++idx)
     {
-        auto child_path = path;
+        SEXP child = CAR(next);
+        std::vector<int> child_path = path;
         child_path.push_back(idx);
-        gatherOperatorsRecursive(CAR(next), child_path, ops);
+
+        if (this_is_block && isDeletableStatement(child))
+        {
+            // Fall back to the block's (inherited) bounds when keep.source did
+            // not produce a per-statement srcref list.
+            int del_start_line = node_start_line;
+            int del_start_col = node_start_col;
+            int del_end_line = node_end_line;
+            int del_end_col = node_end_col;
+            // The block's srcref list is offset by one: element 0 describes the
+            // `{` itself, so statement `idx` (0-based over CDR) is element idx+1.
+            if (block_srcrefs != R_NilValue && idx + 1 < Rf_length(block_srcrefs))
+                extractSrcrefBounds(VECTOR_ELT(block_srcrefs, idx + 1),
+                                    del_start_line, del_start_col,
+                                    del_end_line, del_end_col);
+
+            SEXP del_symbol = (TYPEOF(child) == LANGSXP) ? CAR(child) : child;
+            auto del = std::make_unique<DeleteOperator>(child);
+            ops.push_back({child_path, std::move(del), del_start_line, del_start_col,
+                           del_end_line, del_end_col, del_symbol, _file_path});
+        }
+
+        gatherOperatorsRecursive(child, child_path, ops);
     }
 }
