@@ -915,9 +915,6 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     }
   }
 
-  # Clean up transient resources before returning.
-  gc() # Force garbage collection to clean up connections
-
   # Summarize test results
   total_mutants <- length(test_results)
   survived <- sum(vapply(package_mutants, function(m) identical(m$status, "SURVIVED"), logical(1)))
