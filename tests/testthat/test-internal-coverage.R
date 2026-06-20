@@ -326,6 +326,32 @@ test_that("mutate_file falls back to line-deletion mutants when C call fails", {
     expect_true(all(vapply(mutants, function(m) file.exists(m$path), logical(1))))
 })
 
+test_that("max_line_deletions caps and can disable line-deletion mutants", {
+    mutate_file <- resolve_mutator_fn("mutate_file")
+
+    src <- tempfile(fileext = ".R")
+    on.exit(unlink(src), add = TRUE)
+    # A pure top-level script (no { } blocks) so all mutants come from
+    # line-deletion, isolating the effect of max_line_deletions.
+    writeLines(sprintf("x%d <- %d", 1:10, 1:10), src)
+
+    count_line_dels <- function(mutants) {
+      sum(vapply(mutants, function(m) grepl("deleted line", m$info, fixed = TRUE), logical(1)))
+    }
+
+    out0 <- tempfile("md0_"); dir.create(out0); on.exit(unlink(out0, recursive = TRUE), add = TRUE)
+    expect_equal(count_line_dels(mutate_file(src, out_dir = out0, max_line_deletions = 0)), 0)
+
+    out3 <- tempfile("md3_"); dir.create(out3); on.exit(unlink(out3, recursive = TRUE), add = TRUE)
+    expect_equal(count_line_dels(mutate_file(src, out_dir = out3, max_line_deletions = 3)), 3)
+
+    out9 <- tempfile("md9_"); dir.create(out9); on.exit(unlink(out9, recursive = TRUE), add = TRUE)
+    expect_equal(count_line_dels(mutate_file(src, out_dir = out9, max_line_deletions = 9)), 9)
+
+    expect_error(mutate_file(src, out_dir = out0, max_line_deletions = -1), "max_line_deletions")
+    expect_error(mutate_file(src, out_dir = out0, max_line_deletions = 1.5), "whole number")
+})
+
 test_that("mutate_file restores keep.source option", {
     mutate_file <- resolve_mutator_fn("mutate_file")
 
@@ -535,6 +561,57 @@ test_that("mutate_package passes explicit timeout to inline worker execution", {
 
     expect_true(is.list(result))
     expect_equal(observed_timeout, 12.5)
+})
+
+test_that("mutate_package applies a floor to derived timeouts", {
+    mutate_package <- resolve_mutator_fn("mutate_package")
+
+    pkg_info <- create_test_package("testMutatoRTimeoutFloor")
+    on.exit(cleanup_test_package(pkg_info), add = TRUE)
+
+    mutation_dir <- tempfile("mutations_timeout_floor_")
+    dir.create(mutation_dir, recursive = TRUE)
+    on.exit(unlink(mutation_dir, recursive = TRUE), add = TRUE)
+
+    mut_path <- file.path(mutation_dir, "my_abs.R_001.R")
+    writeLines("my_abs <- function(x) x", mut_path)
+
+    observed_timeout <- NA_real_
+
+    testthat::local_mocked_bindings(
+        mutate_file = function(...) {
+            list(list(path = mut_path, info = "mock mutation"))
+        },
+        .package = "mutator"
+    )
+    testthat::local_mocked_bindings(
+        future_map = function(.x, .f, ...) {
+            dots <- list(...)
+            if (!is.null(dots$.options) && !is.null(dots$.options$globals)) {
+                observed_timeout <<- dots$.options$globals$effective_timeout_seconds
+            }
+            out <- lapply(.x, .f)
+            names(out) <- names(.x)
+            out
+        },
+        furrr_options = function(...) {
+            list(...)
+        },
+        .package = "furrr"
+    )
+    testthat::local_mocked_bindings(
+        plan = function(...) NULL,
+        .package = "future"
+    )
+
+    result <- mutate_package(
+        pkg_dir = pkg_info$pkg_dir,
+        cores = 1,
+        mutation_dir = mutation_dir
+    )
+
+    expect_true(is.list(result))
+    expect_gte(observed_timeout, 5)
 })
 
 test_that("mutate_package computes equivalent mutant summary when enabled", {

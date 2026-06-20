@@ -4,7 +4,12 @@
 \alias{mutate_file}
 \title{Generate Mutants for a Single R File}
 \usage{
-mutate_file(src_file, out_dir = "mutations", max_mutants = NULL)
+mutate_file(
+  src_file,
+  out_dir = "mutations",
+  max_mutants = NULL,
+  max_line_deletions = 5
+)
 }
 \arguments{
 \item{src_file}{Path to an R source file.}
@@ -13,6 +18,11 @@ mutate_file(src_file, out_dir = "mutations", max_mutants = NULL)
 
 \item{max_mutants}{Optional cap on the number of returned mutants. If set,
 a random subset of generated mutants is returned.}
+
+\item{max_line_deletions}{Maximum number of line-deletion mutants generated
+per file (a random subset of deletable lines). These complement the
+AST-based statement deletions by also covering top-level / non-block lines.
+Use \code{0} to disable line-deletion mutants entirely. Defaults to \code{5}.}
 }
 \value{
 A list of mutants. Each element contains:

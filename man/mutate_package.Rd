@@ -12,7 +12,8 @@ mutate_package(
   mutation_dir = NULL,
   max_mutants = NULL,
   timeout_seconds = NULL,
-  config_dir = getwd()
+  config_dir = getwd(),
+  max_line_deletions = 5
 )
 }
 \arguments{
@@ -31,15 +32,18 @@ If \code{NULL}, a temporary directory is used.}
 \item{max_mutants}{Optional cap on the number of mutants tested.}
 
 \item{timeout_seconds}{Optional timeout in seconds for each mutant run.
-If \code{NULL}, timeout is derived from baseline runtime. Each mutant's tests run
-in a separate subprocess, so the limit is enforced as a hard wall-clock kill
-even when a mutant loops inside compiled code (via \pkg{callr} for the
-\code{testthat} strategy and \code{system2(timeout=)} for the installed-tests
-strategy).}
+If \code{NULL}, timeout is derived from baseline runtime with a small minimum
+floor. Each mutant's tests run in a separate subprocess, so the limit is
+enforced as a hard wall-clock kill even when a mutant loops inside compiled
+code (via \pkg{callr} for the \code{testthat} strategy and
+\code{system2(timeout=)} for the installed-tests strategy).}
 
 \item{config_dir}{Directory searched for a \code{.openai_config} file when
 \code{detectEqMutants = TRUE} (see \code{\link[=get_openai_config]{get_openai_config()}}). Defaults to the
 current working directory.}
+
+\item{max_line_deletions}{Maximum number of line-deletion mutants per \code{.R}
+file (passed to \code{\link[=mutate_file]{mutate_file()}}); \code{0} disables them. Defaults to \code{5}.}
 }
 \value{
 An invisible list with two components:

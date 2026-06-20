@@ -133,6 +133,10 @@ format_mutation_info <- function(src_file, raw_info = NULL) {
 #' @param out_dir Directory where mutant files are written.
 #' @param max_mutants Optional cap on the number of returned mutants. If set,
 #'   a random subset of generated mutants is returned.
+#' @param max_line_deletions Maximum number of line-deletion mutants generated
+#'   per file (a random subset of deletable lines). These complement the
+#'   AST-based statement deletions by also covering top-level / non-block lines.
+#'   Use `0` to disable line-deletion mutants entirely. Defaults to `5`.
 #'
 #' @return A list of mutants. Each element contains:
 #' \describe{
@@ -147,8 +151,13 @@ format_mutation_info <- function(src_file, raw_info = NULL) {
 #' length(mutants)
 #'
 #' @export
-mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL) {
+mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL,
+                        max_line_deletions = 5) {
   max_mutants <- normalize_max_mutants(max_mutants)
+  max_line_deletions <- normalize_max_mutants(max_line_deletions, "max_line_deletions")
+  if (is.null(max_line_deletions)) {
+    stop("`max_line_deletions` must be a single non-negative whole number.", call. = FALSE)
+  }
 
   dir.create(out_dir, showWarnings = FALSE)
   old_options <- options(keep.source = TRUE)
@@ -198,7 +207,7 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL) {
   results <- c(
     results,
     delete_line_mutants(src_file, out_dir, base_name,
-      max_del   = 5,
+      max_del   = max_line_deletions,
       start_idx = length(results) + 1L
     )
   )
@@ -238,14 +247,16 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL) {
 #'   If `NULL`, a temporary directory is used.
 #' @param max_mutants Optional cap on the number of mutants tested.
 #' @param timeout_seconds Optional timeout in seconds for each mutant run.
-#'   If `NULL`, timeout is derived from baseline runtime. Each mutant's tests run
-#'   in a separate subprocess, so the limit is enforced as a hard wall-clock kill
-#'   even when a mutant loops inside compiled code (via \pkg{callr} for the
-#'   `testthat` strategy and `system2(timeout=)` for the installed-tests
-#'   strategy).
+#'   If `NULL`, timeout is derived from baseline runtime with a small minimum
+#'   floor. Each mutant's tests run in a separate subprocess, so the limit is
+#'   enforced as a hard wall-clock kill even when a mutant loops inside compiled
+#'   code (via \pkg{callr} for the `testthat` strategy and
+#'   `system2(timeout=)` for the installed-tests strategy).
 #' @param config_dir Directory searched for a `.openai_config` file when
 #'   `detectEqMutants = TRUE` (see [get_openai_config()]). Defaults to the
 #'   current working directory.
+#' @param max_line_deletions Maximum number of line-deletion mutants per `.R`
+#'   file (passed to [mutate_file()]); `0` disables them. Defaults to `5`.
 #'
 #' @return An invisible list with two components:
 #' \describe{
@@ -284,9 +295,15 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL) {
 mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
                            isFullLog = FALSE, detectEqMutants = FALSE,
                            mutation_dir = NULL, max_mutants = NULL,
-                           timeout_seconds = NULL, config_dir = getwd()) {
+                           timeout_seconds = NULL, config_dir = getwd(),
+                           max_line_deletions = 5) {
   timeout_multiplier <- 1.5
+  timeout_floor_seconds <- 5
   max_mutants <- normalize_max_mutants(max_mutants)
+  max_line_deletions <- normalize_max_mutants(max_line_deletions, "max_line_deletions")
+  if (is.null(max_line_deletions)) {
+    stop("`max_line_deletions` must be a single non-negative whole number.", call. = FALSE)
+  }
   if (!is.null(timeout_seconds)) {
     if (!is.numeric(timeout_seconds) || length(timeout_seconds) != 1 || !is.finite(timeout_seconds)) {
       stop("`timeout_seconds` must be a single finite numeric value.", call. = FALSE)
@@ -677,7 +694,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
   # after sampling.
   mutant_specs <- list()
   for (src in r_files) {
-    for (m in mutate_file(src, out_dir = mutation_dir)) {
+    for (m in mutate_file(src, out_dir = mutation_dir, max_line_deletions = max_line_deletions)) {
       id <- paste(basename(src), basename(m$path), sep = "_")
       mutant_specs[[id]] <- list(src = src, info = m$info, mutant_file = m$path)
     }
@@ -716,10 +733,11 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
   parallel_results <- list()
   workers_to_use <- max(1, min(cores, max(1, length(mutants))))
 
+  derived_timeout_seconds <- baseline_elapsed_seconds * timeout_multiplier
   effective_timeout_seconds <- if (!is.null(timeout_seconds)) {
     timeout_seconds
   } else {
-    baseline_elapsed_seconds * timeout_multiplier
+    max(derived_timeout_seconds, timeout_floor_seconds)
   }
 
   if (!is.finite(effective_timeout_seconds) || effective_timeout_seconds <= 0) {
@@ -732,7 +750,11 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
       baseline_elapsed_seconds,
       effective_timeout_seconds,
       if (is.null(timeout_seconds)) {
-        sprintf("baseline x %.2f", timeout_multiplier)
+        if (effective_timeout_seconds > derived_timeout_seconds) {
+          sprintf("baseline x %.2f, floor %.2fs", timeout_multiplier, timeout_floor_seconds)
+        } else {
+          sprintf("baseline x %.2f", timeout_multiplier)
+        }
       } else {
         "explicit"
       }
