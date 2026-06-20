@@ -238,7 +238,11 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL) {
 #'   If `NULL`, a temporary directory is used.
 #' @param max_mutants Optional cap on the number of mutants tested.
 #' @param timeout_seconds Optional timeout in seconds for each mutant run.
-#'   If `NULL`, timeout is derived from baseline runtime.
+#'   If `NULL`, timeout is derived from baseline runtime. For the installed-tests
+#'   strategy the limit is enforced as a hard wall-clock kill of the test
+#'   subprocess; for the `testthat` strategy it is best-effort (via
+#'   [base::setTimeLimit()]) and may not interrupt code running in compiled
+#'   routines.
 #' @param config_dir Directory searched for a `.openai_config` file when
 #'   `detectEqMutants = TRUE` (see [get_openai_config()]). Defaults to the
 #'   current working directory.
@@ -389,6 +393,16 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
   run_installed_package_tests <- function(pkg_path) {
     set_last_test_failure(NULL)
 
+    # Hard wall-clock limit for the install/test subprocesses. setTimeLimit()
+    # cannot interrupt these (they run outside the R interpreter), so the limit
+    # is enforced via system2(timeout = ). 0 means "no limit" and is used for
+    # the baseline run, where effective_timeout_seconds is not yet known (NA).
+    run_timeout <- if (is.finite(effective_timeout_seconds) && effective_timeout_seconds > 0) {
+      effective_timeout_seconds
+    } else {
+      0
+    }
+
     pkg_name <- tryCatch(
       get_package_name(pkg_path),
       error = function(e) {
@@ -420,7 +434,8 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
           pkg_path
         ),
         stdout = TRUE,
-        stderr = TRUE
+        stderr = TRUE,
+        timeout = run_timeout
       )),
       error = function(e) e
     )
@@ -434,6 +449,11 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     install_status <- attr(install_output, "status")
     if (is.null(install_status)) {
       install_status <- 0L
+    }
+    # system2() reports a timeout kill as status 124. Signal it with a message
+    # the caller recognises so the mutant is classified as HANG (not KILLED).
+    if (identical(as.integer(install_status), 124L)) {
+      stop("reached elapsed time limit: package installation exceeded the mutant timeout")
     }
     if (!identical(as.integer(install_status), 0L)) {
       set_last_test_failure(
@@ -459,23 +479,50 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
         fallback_libs <- paste(c(temp_lib, .libPaths()), collapse = .Platform$path.sep)
         Sys.setenv(R_LIBS = fallback_libs)
 
-        tools::testInstalledPackage(
-          pkg = pkg_name,
-          lib.loc = temp_lib,
-          outDir = temp_out,
-          types = "tests"
+        # Run the installed-package tests in a separate process so a hard
+        # wall-clock timeout can be enforced: tools::testInstalledPackage()
+        # spawns its own test subprocesses, which setTimeLimit() cannot reach.
+        runner <- tempfile("mutator_test_runner_", fileext = ".R")
+        on.exit(unlink(runner), add = TRUE)
+        writeLines(
+          c(
+            sprintf(
+              "status <- tools::testInstalledPackage(pkg = %s, lib.loc = %s, outDir = %s, types = \"tests\")",
+              deparse(pkg_name), deparse(temp_lib), deparse(temp_out)
+            ),
+            "if (!is.numeric(status)) status <- 1L",
+            "quit(save = \"no\", status = as.integer(status))"
+          ),
+          runner
         )
+
+        rscript <- file.path(R.home("bin"), "Rscript")
+        run_output <- suppressWarnings(system2(
+          rscript,
+          args = c("--vanilla", shQuote(runner)),
+          stdout = TRUE,
+          stderr = TRUE,
+          timeout = run_timeout
+        ))
+        status <- attr(run_output, "status")
+        if (is.null(status)) 0L else as.integer(status)
       },
       error = function(e) e
     )
 
     if (inherits(test_code, "error")) {
-      set_last_test_failure(paste0("tools::testInstalledPackage() failed: ", test_code$message))
+      set_last_test_failure(paste0("Installed-package test execution failed: ", test_code$message))
       message("Fallback test execution error: ", test_code$message)
       return(FALSE)
     }
 
-    passed <- identical(as.integer(test_code), 0L)
+    # A status of 124 means the test subprocess was killed on timeout; surface it
+    # as a HANG via a message the caller recognises.
+    if (identical(test_code, 124L)) {
+      stop("reached elapsed time limit: installed-package tests exceeded the mutant timeout")
+    }
+
+    passed <- identical(test_code, 0L)
     if (!passed) {
       set_last_test_failure(
         paste0(

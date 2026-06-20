@@ -31,7 +31,11 @@ If \code{NULL}, a temporary directory is used.}
 \item{max_mutants}{Optional cap on the number of mutants tested.}
 
 \item{timeout_seconds}{Optional timeout in seconds for each mutant run.
-If \code{NULL}, timeout is derived from baseline runtime.}
+If \code{NULL}, timeout is derived from baseline runtime. For the installed-tests
+strategy the limit is enforced as a hard wall-clock kill of the test
+subprocess; for the \code{testthat} strategy it is best-effort (via
+\code{\link[base:setTimeLimit]{base::setTimeLimit()}}) and may not interrupt code running in compiled
+routines.}
 
 \item{config_dir}{Directory searched for a \code{.openai_config} file when
 \code{detectEqMutants = TRUE} (see \code{\link[=get_openai_config]{get_openai_config()}}). Defaults to the
