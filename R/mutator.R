@@ -451,6 +451,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     on.exit(unlink(temp_out, recursive = TRUE, force = TRUE), add = TRUE)
 
     r_bin <- file.path(R.home("bin"), "R")
+    install_started <- Sys.time()
     install_output <- tryCatch(
       suppressWarnings(system2(
         r_bin,
@@ -497,6 +498,18 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
       return(FALSE)
     }
 
+    # Charge install time against the per-mutant budget so install + tests share
+    # a single wall-clock limit (rather than allowing one full timeout per
+    # phase). 0 keeps the baseline run unlimited.
+    test_timeout <- run_timeout
+    if (run_timeout > 0) {
+      install_elapsed <- as.numeric(Sys.time() - install_started, units = "secs")
+      test_timeout <- run_timeout - install_elapsed
+      if (test_timeout <= 0) {
+        stop("reached elapsed time limit: package installation exhausted the mutant timeout")
+      }
+    }
+
     test_code <- tryCatch(
       {
         old_r_libs <- Sys.getenv("R_LIBS", unset = "")
@@ -530,7 +543,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
           args = c("--vanilla", shQuote(runner)),
           stdout = TRUE,
           stderr = TRUE,
-          timeout = run_timeout
+          timeout = test_timeout
         ))
         status <- attr(run_output, "status")
         if (is.null(status)) 0L else as.integer(status)
@@ -717,15 +730,13 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     names(pkg_dir_list) <- mutant_ids
 
     run_one_mutant <- function(pkg) {
+      # No setTimeLimit() here: each test strategy enforces its own hard
+      # subprocess timeout (callr for testthat, system2 for installed-tests) and
+      # signals a timeout with a "reached ... time limit" message. An outer
+      # setTimeLimit() could fire while we are blocked waiting on the child,
+      # unwinding past the code that kills/collects it and orphaning the process.
       tryCatch(
         {
-          setTimeLimit(
-            cpu = effective_timeout_seconds,
-            elapsed = effective_timeout_seconds,
-            transient = TRUE
-          )
-          on.exit(setTimeLimit(cpu = Inf, elapsed = Inf, transient = FALSE), add = TRUE)
-
           passed <- run_tests(pkg)
           if (isTRUE(passed)) "SURVIVED" else "KILLED"
         },
