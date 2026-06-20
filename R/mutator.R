@@ -238,11 +238,11 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL) {
 #'   If `NULL`, a temporary directory is used.
 #' @param max_mutants Optional cap on the number of mutants tested.
 #' @param timeout_seconds Optional timeout in seconds for each mutant run.
-#'   If `NULL`, timeout is derived from baseline runtime. For the installed-tests
-#'   strategy the limit is enforced as a hard wall-clock kill of the test
-#'   subprocess; for the `testthat` strategy it is best-effort (via
-#'   [base::setTimeLimit()]) and may not interrupt code running in compiled
-#'   routines.
+#'   If `NULL`, timeout is derived from baseline runtime. Each mutant's tests run
+#'   in a separate subprocess, so the limit is enforced as a hard wall-clock kill
+#'   even when a mutant loops inside compiled code (via \pkg{callr} for the
+#'   `testthat` strategy and `system2(timeout=)` for the installed-tests
+#'   strategy).
 #' @param config_dir Directory searched for a `.openai_config` file when
 #'   `detectEqMutants = TRUE` (see [get_openai_config()]). Defaults to the
 #'   current working directory.
@@ -345,49 +345,77 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
   run_testthat_tests <- function(pkg_path) {
     set_last_test_failure(NULL)
 
-    old_wd <- getwd()
-    on.exit(
-      {
-        setwd(old_wd)
-      },
-      add = TRUE
-    )
-    setwd(pkg_path)
+    # Hard wall-clock limit, enforced by running in a callr subprocess (see
+    # run_installed_package_tests for the rationale). Inf (the baseline run,
+    # where effective_timeout_seconds is not yet known) means no limit.
+    run_timeout <- if (is.finite(effective_timeout_seconds) && effective_timeout_seconds > 0) {
+      effective_timeout_seconds
+    } else {
+      Inf
+    }
 
-    loaded <- tryCatch(
-      {
-        pkgload::load_all(quiet = TRUE)
-        TRUE
-      },
-      error = function(e) {
-        set_last_test_failure(paste0("Package load failed: ", e$message))
-        message("Load error: ", e$message)
-        FALSE
-      }
+    # Load and test the mutant in a fresh process so the timeout can be enforced
+    # even when the mutant loops inside compiled code, and so per-mutant state
+    # cannot leak into the mutator session. We drive the process explicitly with
+    # r_bg()/$wait()/$kill() rather than callr::r(timeout=), whose timeout
+    # conversion is unreliable. Output is captured to a file and surfaced via
+    # message() afterwards (kept for debugging).
+    # TODO: switch to reporter = "silent" once stable.
+    timeout_ms <- if (is.finite(run_timeout)) as.integer(ceiling(run_timeout * 1000)) else -1L
+
+    out_file <- tempfile("mutator_testthat_out_")
+    on.exit(unlink(out_file), add = TRUE)
+
+    proc <- tryCatch(
+      callr::r_bg(
+        function(pkg_path) {
+          setwd(pkg_path)
+          suppressMessages(pkgload::load_all(".", quiet = TRUE))
+          tr <- testthat::test_dir("tests/testthat")
+          sum(tr$failed)
+        },
+        args = list(pkg_path = pkg_path),
+        stdout = out_file,
+        stderr = "2>&1"
+      ),
+      error = function(e) e
     )
-    if (!loaded) {
+    if (inherits(proc, "error")) {
+      set_last_test_failure(paste0("Could not start test subprocess: ", conditionMessage(proc)))
+      message("Test error: ", conditionMessage(proc))
       return(FALSE)
     }
 
-    passed <- tryCatch(
-      {
-        # TODO: switch to reporter = "silent" once stable; the default reporter's
-        # per-mutant output is kept for now because it is useful for debugging.
-        tr <- testthat::test_dir("tests/testthat")
-        num_failed <- sum(tr$failed)
-        if (num_failed > 0) {
-          set_last_test_failure(sprintf("testthat reported %d failing test(s).", num_failed))
-        }
-        num_failed == 0
-      },
-      error = function(e) {
-        set_last_test_failure(paste0("testthat execution failed: ", e$message))
-        message("Test error: ", e$message)
-        FALSE
-      }
-    )
+    proc$wait(timeout = timeout_ms)
+    timed_out <- proc$is_alive()
+    if (timed_out) {
+      proc$kill()
+    }
 
-    passed
+    # Surface the subprocess output (testthat reporter) for debugging.
+    test_output <- tryCatch(readLines(out_file, warn = FALSE), error = function(e) character(0))
+    if (length(test_output) > 0) {
+      message(paste(test_output, collapse = "\n"))
+    }
+
+    if (timed_out) {
+      # Subprocess killed on timeout: surface as a HANG via the recognised message.
+      stop("reached elapsed time limit: testthat run exceeded the mutant timeout")
+    }
+
+    result <- tryCatch(proc$get_result(), error = function(e) e)
+    if (inherits(result, "error")) {
+      # Package load failure or test execution error -> treat as killed.
+      set_last_test_failure(paste0("testthat run failed: ", conditionMessage(result)))
+      message("Test error: ", conditionMessage(result))
+      return(FALSE)
+    }
+
+    num_failed <- result
+    if (num_failed > 0) {
+      set_last_test_failure(sprintf("testthat reported %d failing test(s).", num_failed))
+    }
+    num_failed == 0
   }
 
   run_installed_package_tests <- function(pkg_path) {

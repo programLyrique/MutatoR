@@ -20,7 +20,8 @@ Imports:
     pkgload,
     testthat,
     future,
-    furrr
+    furrr,
+    callr
 Suggests:
     xml2
 LinkingTo:
