@@ -672,25 +672,39 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     pkg_copy
   }
 
-  mutants <- list()
+  # First gather lightweight descriptors for every candidate mutant. Building
+  # the per-mutant package copy is the expensive step, so it is deferred until
+  # after sampling.
+  mutant_specs <- list()
   for (src in r_files) {
     for (m in mutate_file(src, out_dir = mutation_dir)) {
-      temp_root <- tempfile("mut_pkg_")
-      pkg_copy <- create_linked_package_copy(
-        pkg_dir = pkg_dir,
-        src_file = src,
-        mutated_file = m$path,
-        target_root = temp_root
-      )
-
       id <- paste(basename(src), basename(m$path), sep = "_")
-      mutants[[id]] <- list(pkg = pkg_copy, info = m$info, src = src, mutant_file = m$path)
+      mutant_specs[[id]] <- list(src = src, info = m$info, mutant_file = m$path)
     }
   }
 
-  if (!is.null(max_mutants) && length(mutants) > max_mutants) {
-    selected_ids <- base::sample(names(mutants), max_mutants)
-    mutants <- mutants[selected_ids]
+  # Sample before materializing package copies. This is the same uniform sample
+  # as sampling afterwards, applied earlier, so the distribution is unchanged;
+  # it just avoids building copies for mutants that would be discarded.
+  if (!is.null(max_mutants) && length(mutant_specs) > max_mutants) {
+    selected_ids <- base::sample(names(mutant_specs), max_mutants)
+    mutant_specs <- mutant_specs[selected_ids]
+  }
+
+  # Materialize package copies only for the selected mutants.
+  mutants <- list()
+  for (id in names(mutant_specs)) {
+    spec <- mutant_specs[[id]]
+    temp_root <- tempfile("mut_pkg_")
+    pkg_copy <- create_linked_package_copy(
+      pkg_dir = pkg_dir,
+      src_file = spec$src,
+      mutated_file = spec$mutant_file,
+      target_root = temp_root
+    )
+    mutants[[id]] <- list(
+      pkg = pkg_copy, info = spec$info, src = spec$src, mutant_file = spec$mutant_file
+    )
   }
 
   # options(
