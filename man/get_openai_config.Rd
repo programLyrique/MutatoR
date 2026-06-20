@@ -4,14 +4,30 @@
 \alias{get_openai_config}
 \title{Get OpenAI API configuration}
 \usage{
-get_openai_config()
+get_openai_config(dir = getwd())
+}
+\arguments{
+\item{dir}{Directory to search for a \code{.openai_config} file. Only this
+directory is consulted (parent directories are not). Defaults to the
+current working directory; pass \code{NULL} to ignore config files.}
 }
 \value{
-List containing api_key and model values
+A list with elements \code{api_key}, \code{model} and \code{base_url}.
 }
 \description{
-Retrieves API key and model configuration from environment variables
-or a configuration file.
+Resolves the API key, model and base URL used for equivalent-mutant
+detection. Each field is resolved independently, with this precedence
+(highest first):
+}
+\details{
+\enumerate{
+\item values set with \code{\link[=set_openai_config]{set_openai_config()}};
+\item a \code{.openai_config} file in \code{dir} (a human-readable "field: value" file
+that is parsed, never executed);
+\item the environment variables \code{OPENAI_API_KEY}, \code{OPENAI_MODEL} and
+\code{OPENAI_BASE_URL};
+\item built-in defaults (model \code{"gpt-4"}, the public OpenAI base URL).
+}
 }
 \examples{
 config <- get_openai_config()

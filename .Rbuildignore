@@ -10,4 +10,4 @@ packages
 ^revdep$
 ^.*\.Rcheck$
 ^.*\.tar\.gz$
-^\.openai_config\.R$
+^\.openai_config$

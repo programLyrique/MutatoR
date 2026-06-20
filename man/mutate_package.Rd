@@ -11,7 +11,8 @@ mutate_package(
   detectEqMutants = FALSE,
   mutation_dir = NULL,
   max_mutants = NULL,
-  timeout_seconds = NULL
+  timeout_seconds = NULL,
+  config_dir = getwd()
 )
 }
 \arguments{
@@ -31,6 +32,10 @@ If \code{NULL}, a temporary directory is used.}
 
 \item{timeout_seconds}{Optional timeout in seconds for each mutant run.
 If \code{NULL}, timeout is derived from baseline runtime.}
+
+\item{config_dir}{Directory searched for a \code{.openai_config} file when
+\code{detectEqMutants = TRUE} (see \code{\link[=get_openai_config]{get_openai_config()}}). Defaults to the
+current working directory.}
 }
 \value{
 An invisible list with two components:

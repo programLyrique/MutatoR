@@ -239,6 +239,9 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL) {
 #' @param max_mutants Optional cap on the number of mutants tested.
 #' @param timeout_seconds Optional timeout in seconds for each mutant run.
 #'   If `NULL`, timeout is derived from baseline runtime.
+#' @param config_dir Directory searched for a `.openai_config` file when
+#'   `detectEqMutants = TRUE` (see [get_openai_config()]). Defaults to the
+#'   current working directory.
 #'
 #' @return An invisible list with two components:
 #' \describe{
@@ -273,7 +276,7 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL) {
 mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
                            isFullLog = FALSE, detectEqMutants = FALSE,
                            mutation_dir = NULL, max_mutants = NULL,
-                           timeout_seconds = NULL) {
+                           timeout_seconds = NULL, config_dir = getwd()) {
   timeout_multiplier <- 1.5
   max_mutants <- normalize_max_mutants(max_mutants)
   if (!is.null(timeout_seconds)) {
@@ -759,6 +762,10 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     # mutant ID (filenames frequently contain '_' and '.').
     src_files <- unique(vapply(survived_mutants, function(m) m$src, character(1)))
 
+    # Resolve the OpenAI configuration once, looking for a `.openai_config`
+    # file in `config_dir` rather than depending on the working directory.
+    api_config <- get_openai_config(dir = config_dir)
+
     # Process each source file
     for (src_file in src_files) {
       # Get mutants for this source file
@@ -768,7 +775,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
         logical(1)
       )]
       if (length(file_mutants) > 0) {
-        file_mutants <- identify_equivalent_mutants(src_file, file_mutants)
+        file_mutants <- identify_equivalent_mutants(src_file, file_mutants, api_config = api_config)
         # Update the main package_mutants list with equivalence information
         for (id in names(file_mutants)) {
           package_mutants[[id]]$equivalent <- file_mutants[[id]]$equivalent

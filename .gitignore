@@ -12,7 +12,7 @@ mutations/*
 mutations_reduced/*
 main.cpp
 cpp_tests/*.txt
-.openai_config.R
+.openai_config
 ..Rcheck/*
 packages/
 mutator.Rcheck

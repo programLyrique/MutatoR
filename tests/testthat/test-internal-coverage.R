@@ -149,62 +149,123 @@ test_that("fallback_line_verdicts does not bleed verdicts across mutants", {
     expect_equal(fallback_line_verdicts("Mutant x: NOT EQUIVALENT", "x")[["x"]], "NOT_EQUIVALENT")
 })
 
-test_that("get_openai_config prefers environment variables", {
-    get_openai_config <- resolve_mutator_fn("get_openai_config")
+# Save/restore a single environment variable across a test.
+restore_env_var <- function(name, value) {
+    if (is.na(value)) {
+        Sys.unsetenv(name)
+    } else {
+        args <- list(value)
+        names(args) <- name
+        do.call(Sys.setenv, args)
+    }
+}
 
-    old_key <- Sys.getenv("OPENAI_API_KEY", unset = NA_character_)
-    old_model <- Sys.getenv("OPENAI_MODEL", unset = NA_character_)
+test_that("get_openai_config uses defaults, environment variables and base_url", {
+    get_openai_config <- resolve_mutator_fn("get_openai_config")
+    reset_openai_config <- resolve_mutator_fn("reset_openai_config")
+    reset_openai_config()
+
+    old <- Sys.getenv(c("OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL"), unset = NA_character_)
     on.exit(
         {
-            if (is.na(old_key)) Sys.unsetenv("OPENAI_API_KEY") else Sys.setenv(OPENAI_API_KEY = old_key)
-            if (is.na(old_model)) Sys.unsetenv("OPENAI_MODEL") else Sys.setenv(OPENAI_MODEL = old_model)
+            reset_openai_config()
+            restore_env_var("OPENAI_API_KEY", old[["OPENAI_API_KEY"]])
+            restore_env_var("OPENAI_MODEL", old[["OPENAI_MODEL"]])
+            restore_env_var("OPENAI_BASE_URL", old[["OPENAI_BASE_URL"]])
         },
         add = TRUE
     )
+    Sys.unsetenv(c("OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL"))
 
-    Sys.setenv(OPENAI_API_KEY = "env-key", OPENAI_MODEL = "env-model")
-    cfg <- get_openai_config()
+    empty_dir <- tempfile("cfg_empty_")
+    dir.create(empty_dir)
+    on.exit(unlink(empty_dir, recursive = TRUE), add = TRUE)
 
-    expect_equal(cfg$api_key, "env-key")
-    expect_equal(cfg$model, "env-model")
+    cfg <- get_openai_config(dir = empty_dir)
+    expect_equal(cfg$api_key, "")
+    expect_equal(cfg$model, "gpt-4")
+    expect_equal(cfg$base_url, "https://api.openai.com/v1")
+
+    Sys.setenv(
+        OPENAI_API_KEY = "env-key",
+        OPENAI_MODEL = "env-model",
+        OPENAI_BASE_URL = "https://env.example/v1"
+    )
+    cfg2 <- get_openai_config(dir = empty_dir)
+    expect_equal(cfg2$api_key, "env-key")
+    expect_equal(cfg2$model, "env-model")
+    expect_equal(cfg2$base_url, "https://env.example/v1")
 })
 
-test_that("get_openai_config searches parent folders for config file", {
+test_that("get_openai_config reads a .openai_config DCF file and does not walk parents", {
     get_openai_config <- resolve_mutator_fn("get_openai_config")
+    reset_openai_config <- resolve_mutator_fn("reset_openai_config")
+    reset_openai_config()
 
     old_key <- Sys.getenv("OPENAI_API_KEY", unset = NA_character_)
-    old_model <- Sys.getenv("OPENAI_MODEL", unset = NA_character_)
-    old_wd <- getwd()
     on.exit(
         {
-            setwd(old_wd)
-            if (is.na(old_key)) Sys.unsetenv("OPENAI_API_KEY") else Sys.setenv(OPENAI_API_KEY = old_key)
-            if (is.na(old_model)) Sys.unsetenv("OPENAI_MODEL") else Sys.setenv(OPENAI_MODEL = old_model)
+            reset_openai_config()
+            restore_env_var("OPENAI_API_KEY", old_key)
         },
         add = TRUE
     )
+    Sys.setenv(OPENAI_API_KEY = "env-key")
 
-    Sys.unsetenv("OPENAI_API_KEY")
-    Sys.unsetenv("OPENAI_MODEL")
-
-    root <- tempfile("cfg_root_")
-    child <- file.path(root, "a", "b")
-    dir.create(child, recursive = TRUE)
-    on.exit(unlink(root, recursive = TRUE), add = TRUE)
-
+    d <- tempfile("cfg_dir_")
+    dir.create(d)
+    on.exit(unlink(d, recursive = TRUE), add = TRUE)
     writeLines(
-        c(
-            "api_key <- 'file-key'",
-            "model <- 'file-model'"
-        ),
-        file.path(root, ".openai_config.R")
+        c("api_key: file-key", "model: file-model", "base_url: https://file.example/v1"),
+        file.path(d, ".openai_config")
     )
 
-    setwd(child)
-    cfg <- get_openai_config()
-
+    cfg <- get_openai_config(dir = d)
+    # File overrides the environment variable.
     expect_equal(cfg$api_key, "file-key")
     expect_equal(cfg$model, "file-model")
+    expect_equal(cfg$base_url, "https://file.example/v1")
+
+    # A config in the parent dir is NOT picked up for a child dir.
+    child <- file.path(d, "sub")
+    dir.create(child)
+    expect_equal(get_openai_config(dir = child)$api_key, "env-key")
+})
+
+test_that("set_openai_config overrides file and environment, per field", {
+    get_openai_config <- resolve_mutator_fn("get_openai_config")
+    set_openai_config <- resolve_mutator_fn("set_openai_config")
+    reset_openai_config <- resolve_mutator_fn("reset_openai_config")
+    reset_openai_config()
+    on.exit(reset_openai_config(), add = TRUE)
+
+    d <- tempfile("cfg_set_")
+    dir.create(d)
+    on.exit(unlink(d, recursive = TRUE), add = TRUE)
+    writeLines(c("api_key: file-key", "model: file-model"), file.path(d, ".openai_config"))
+
+    set_openai_config(api_key = "set-key", base_url = "https://set.example/v1")
+    cfg <- get_openai_config(dir = d)
+    expect_equal(cfg$api_key, "set-key") # setter beats file
+    expect_equal(cfg$model, "file-model") # untouched field falls back to file
+    expect_equal(cfg$base_url, "https://set.example/v1")
+})
+
+test_that("build_chat_completions_url appends path and respects full endpoints", {
+    build_chat_completions_url <- resolve_mutator_fn("build_chat_completions_url")
+
+    expect_equal(
+        build_chat_completions_url("https://api.openai.com/v1"),
+        "https://api.openai.com/v1/chat/completions"
+    )
+    expect_equal(
+        build_chat_completions_url("https://api.openai.com/v1/"),
+        "https://api.openai.com/v1/chat/completions"
+    )
+    expect_equal(
+        build_chat_completions_url("https://x/v1/chat/completions"),
+        "https://x/v1/chat/completions"
+    )
 })
 
 test_that("C_mutate_file validates input types and srcref", {

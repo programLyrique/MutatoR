@@ -219,9 +219,16 @@ call_openai_api <- function(prompt, config) {
             # Convert to JSON with proper settings
             json_body <- jsonlite::toJSON(request_body, auto_unbox = TRUE)
 
+            # Resolve the endpoint from the (OpenAI-compatible) base URL so the
+            # same code can target alternative providers.
+            base_url <- config$base_url
+            if (is.null(base_url) || !nzchar(base_url)) {
+                base_url <- "https://api.openai.com/v1"
+            }
+
             # Make the API request
             response <- httr::POST(
-                url = "https://api.openai.com/v1/chat/completions",
+                url = build_chat_completions_url(base_url),
                 httr::add_headers(
                     "Content-Type" = "application/json",
                     "Authorization" = paste("Bearer", config$api_key)
@@ -250,58 +257,144 @@ call_openai_api <- function(prompt, config) {
     )
 }
 
+# nocov end
+
+# Internal store for configuration set programmatically via set_openai_config().
+.openai_config_store <- new.env(parent = emptyenv())
+
+# Default endpoint base for the OpenAI Chat Completions API.
+.openai_default_base_url <- "https://api.openai.com/v1"
+
+#' Set OpenAI API configuration for the current session
+#'
+#' Overrides the API key, model and/or base URL used by the equivalent-mutant
+#' detection workflow. Values set here take precedence over a `.openai_config`
+#' file and over environment variables. Arguments left `NULL` are unchanged.
+#'
+#' @param api_key API key string.
+#' @param model Model name (e.g. `"gpt-4"`).
+#' @param base_url Base URL of an OpenAI-compatible Chat Completions API, such
+#'   as `"https://api.openai.com/v1"` or `"http://localhost:11434/v1"`.
+#'
+#' @return Invisibly, the resulting configuration (see [get_openai_config()]).
+#'
+#' @examples
+#' set_openai_config(model = "gpt-4o-mini")
+#' get_openai_config()$model
+#' reset_openai_config()
+#'
+#' @export
+set_openai_config <- function(api_key = NULL, model = NULL, base_url = NULL) {
+    if (!is.null(api_key)) assign("api_key", as.character(api_key)[1], envir = .openai_config_store)
+    if (!is.null(model)) assign("model", as.character(model)[1], envir = .openai_config_store)
+    if (!is.null(base_url)) assign("base_url", as.character(base_url)[1], envir = .openai_config_store)
+    invisible(get_openai_config())
+}
+
+#' Clear session OpenAI configuration
+#'
+#' Removes any values set with [set_openai_config()], reverting to configuration
+#' taken from a `.openai_config` file or environment variables.
+#'
+#' @return Invisibly `NULL`.
+#'
+#' @examples
+#' set_openai_config(model = "gpt-4o-mini")
+#' reset_openai_config()
+#'
+#' @export
+reset_openai_config <- function() {
+    rm(list = ls(envir = .openai_config_store, all.names = TRUE), envir = .openai_config_store)
+    invisible(NULL)
+}
+
 #' Get OpenAI API configuration
 #'
-#' Retrieves API key and model configuration from environment variables
-#' or a configuration file.
+#' Resolves the API key, model and base URL used for equivalent-mutant
+#' detection. Each field is resolved independently, with this precedence
+#' (highest first):
 #'
-#' @return List containing api_key and model values
+#' 1. values set with [set_openai_config()];
+#' 2. a `.openai_config` file in `dir` (a human-readable "field: value" file
+#'    that is parsed, never executed);
+#' 3. the environment variables `OPENAI_API_KEY`, `OPENAI_MODEL` and
+#'    `OPENAI_BASE_URL`;
+#' 4. built-in defaults (model `"gpt-4"`, the public OpenAI base URL).
+#'
+#' @param dir Directory to search for a `.openai_config` file. Only this
+#'   directory is consulted (parent directories are not). Defaults to the
+#'   current working directory; pass `NULL` to ignore config files.
+#'
+#' @return A list with elements `api_key`, `model` and `base_url`.
 #'
 #' @examples
 #' config <- get_openai_config()
 #' names(config)
 #'
 #' @export
-get_openai_config <- function() {
-    api_key <- Sys.getenv("OPENAI_API_KEY", "")
-    model <- Sys.getenv("OPENAI_MODEL", "gpt-4")
+get_openai_config <- function(dir = getwd()) {
+    defaults <- list(api_key = "", model = "gpt-4", base_url = .openai_default_base_url)
 
-    if (api_key == "") {
-        # candidates: .openai_config.R and .openai_config.R.template
-        candidates <- c(".openai_config.R", ".openai_config.R.template")
-        wd <- normalizePath(getwd())
-        config_path <- NULL
+    env_cfg <- list()
+    if (nzchar(Sys.getenv("OPENAI_API_KEY"))) env_cfg$api_key <- Sys.getenv("OPENAI_API_KEY")
+    if (nzchar(Sys.getenv("OPENAI_MODEL"))) env_cfg$model <- Sys.getenv("OPENAI_MODEL")
+    if (nzchar(Sys.getenv("OPENAI_BASE_URL"))) env_cfg$base_url <- Sys.getenv("OPENAI_BASE_URL")
 
-        # walk up until we hit root
-        repeat {
-            for (f in candidates) {
-                p <- file.path(wd, f)
-                if (file.exists(p)) {
-                    config_path <- p
-                    break
-                }
-            }
-            if (!is.null(config_path)) break
-            parent <- dirname(wd)
-            if (parent == wd) break
-            wd <- parent
-        }
+    file_cfg <- if (!is.null(dir)) read_openai_config_file(dir) else list()
+    store_cfg <- as.list(.openai_config_store)
 
-        if (!is.null(config_path)) {
-            config_env <- new.env()
-            try(source(config_path, local = config_env), silent = TRUE)
-
-            # pick up either lowercase or uppercase var names
-            if (exists("api_key", envir = config_env)) api_key <- get("api_key", envir = config_env)
-            if (exists("OPENAI_API_KEY", envir = config_env)) api_key <- get("OPENAI_API_KEY", envir = config_env)
-            if (exists("model", envir = config_env)) model <- get("model", envir = config_env)
-            if (exists("OPENAI_MODEL", envir = config_env)) model <- get("OPENAI_MODEL", envir = config_env)
+    pick <- function(key) {
+        if (!is.null(store_cfg[[key]])) {
+            store_cfg[[key]]
+        } else if (!is.null(file_cfg[[key]])) {
+            file_cfg[[key]]
+        } else if (!is.null(env_cfg[[key]])) {
+            env_cfg[[key]]
+        } else {
+            defaults[[key]]
         }
     }
 
-    list(api_key = api_key, model = model)
+    list(api_key = pick("api_key"), model = pick("model"), base_url = pick("base_url"))
 }
-# nocov end
+
+# Read a `.openai_config` file (DCF: "field: value" lines) from `dir`. Returns a
+# named list of any of api_key/model/base_url present (case-insensitive). The
+# file is parsed, never executed, so it cannot run arbitrary code.
+read_openai_config_file <- function(dir) {
+    path <- file.path(dir, ".openai_config")
+    if (!file.exists(path)) {
+        return(list())
+    }
+    dcf <- tryCatch(read.dcf(path), error = function(e) NULL)
+    if (is.null(dcf) || nrow(dcf) < 1L) {
+        return(list())
+    }
+
+    fields <- tolower(colnames(dcf))
+    out <- list()
+    for (key in c("api_key", "model", "base_url")) {
+        idx <- match(key, fields)
+        if (!is.na(idx)) {
+            value <- trimws(unname(dcf[1L, idx]))
+            if (!is.na(value) && nzchar(value)) {
+                out[[key]] <- value
+            }
+        }
+    }
+    out
+}
+
+# Build the Chat Completions endpoint from a base URL. Accepts either a base
+# (".../v1") or an already-complete ".../chat/completions" URL.
+build_chat_completions_url <- function(base_url) {
+    base <- sub("/+$", "", base_url)
+    if (grepl("/chat/completions$", base)) {
+        base
+    } else {
+        paste0(base, "/chat/completions")
+    }
+}
 
 # Map a raw verdict token (from the model) to an equivalence flag and a stable
 # display status. Matching is on letters only, so "NOT_EQUIVALENT",

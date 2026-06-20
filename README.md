@@ -103,15 +103,38 @@ devtools::test()
 
 ### Equivalent Mutant Detection
 
-To use the equivalent mutant detection feature with OpenAI:
+Equivalent-mutant detection calls an OpenAI-compatible Chat Completions API.
+Configure it in any of these ways (listed highest precedence first; each
+setting is resolved independently, so they can be mixed):
 
-1. Set up your OpenAI API key in one of these ways:
-   - Set the environment variable `OPENAI_API_KEY`
-   - Create a file at `~/.openai_config.R` based on the provided template `.openai_config.R.template`
+1. **Programmatically**, in your R session:
 
-2. Optionally, specify the model to use:
-   - Set the environment variable `OPENAI_MODEL` (default is "gpt-4")
-   - Define it in the config file
+   ```r
+   set_openai_config(
+     api_key  = "sk-...",
+     model    = "gpt-4",
+     base_url = "https://api.openai.com/v1" # any OpenAI-compatible endpoint
+   )
+   ```
+
+2. **A `.openai_config` file** in the working directory (or in a directory you
+   pass via `get_openai_config(dir = ...)`). It is a plain, human-readable file
+   of `field: value` lines and is *parsed, never executed*:
+
+   ```
+   api_key: sk-...
+   model: gpt-4
+   base_url: https://api.openai.com/v1
+   ```
+
+   Only the given directory is consulted — parent directories are not searched.
+
+3. **Environment variables** `OPENAI_API_KEY`, `OPENAI_MODEL` and
+   `OPENAI_BASE_URL`.
+
+If nothing is configured, the model defaults to `gpt-4` and the base URL to the
+public OpenAI API. Set `base_url` to target a self-hosted or alternative
+OpenAI-compatible service (for example `http://localhost:11434/v1`).
 
 ## Mutation Operators
 
