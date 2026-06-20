@@ -70,10 +70,83 @@ test_that("create_equivalent_mutant_prompt includes required sections", {
     )
 
     expect_match(prompt, "Original code", fixed = TRUE)
-    expect_match(prompt, "Survived mutants", fixed = TRUE)
-    expect_match(prompt, "Mutant ID: file_001", fixed = TRUE)
-    expect_match(prompt, "Mutant ID: file_002", fixed = TRUE)
-    expect_match(prompt, "DONT KNOW", fixed = TRUE)
+    expect_match(prompt, "file_001", fixed = TRUE)
+    expect_match(prompt, "file_002", fixed = TRUE)
+    expect_match(prompt, "DONT_KNOW", fixed = TRUE)
+    expect_match(prompt, "JSON", fixed = TRUE)
+})
+
+test_that("create_equivalent_mutant_prompt embeds mutated code when provided", {
+    create_equivalent_mutant_prompt <- resolve_mutator_fn("create_equivalent_mutant_prompt")
+
+    prompt <- create_equivalent_mutant_prompt(
+        original_code = "f <- function(x) x + 1",
+        mutant_details = list(
+            list(id = "f_001", mutation_info = "'+' -> '-'", mutated_code = "f <- function(x) x - 1")
+        )
+    )
+
+    # The indented marker only appears in a per-mutant block, not the intro text.
+    expect_match(prompt, "\n  mutated code:\n", fixed = TRUE)
+    expect_match(prompt, "f <- function(x) x - 1", fixed = TRUE)
+
+    # Without mutated_code the per-mutant section is omitted (e.g. the exported
+    # entry point called with only a change description).
+    prompt2 <- create_equivalent_mutant_prompt(
+        original_code = "f <- function(x) x + 1",
+        mutant_details = list(list(id = "f_001", mutation_info = "'+' -> '-'"))
+    )
+    expect_no_match(prompt2, "\n  mutated code:\n", fixed = TRUE)
+})
+
+test_that("parse_equivalence_verdicts reads JSON object, array and fenced forms", {
+    parse_equivalence_verdicts <- resolve_mutator_fn("parse_equivalence_verdicts")
+
+    obj <- '{"results":[{"id":"a_001","verdict":"EQUIVALENT"},{"id":"b_002","verdict":"NOT_EQUIVALENT"}]}'
+    v <- parse_equivalence_verdicts(obj)
+    expect_equal(v[["a_001"]], "EQUIVALENT")
+    expect_equal(v[["b_002"]], "NOT_EQUIVALENT")
+
+    arr <- '[{"id":"a_001","verdict":"DONT_KNOW"}]'
+    expect_equal(parse_equivalence_verdicts(arr)[["a_001"]], "DONT_KNOW")
+
+    fenced <- "```json\n{\"results\":[{\"id\":\"a_001\",\"verdict\":\"EQUIVALENT\"}]}\n```"
+    expect_equal(parse_equivalence_verdicts(fenced)[["a_001"]], "EQUIVALENT")
+
+    # Surrounding prose is tolerated; non-JSON returns NULL so the caller falls back.
+    pre <- "Here is my answer:\n{\"results\":[{\"id\":\"a_001\",\"verdict\":\"EQUIVALENT\"}]}"
+    expect_equal(parse_equivalence_verdicts(pre)[["a_001"]], "EQUIVALENT")
+    expect_null(parse_equivalence_verdicts("no json here"))
+    expect_null(parse_equivalence_verdicts(NULL))
+})
+
+test_that("classify_equivalence_verdict normalises tokens", {
+    classify_equivalence_verdict <- resolve_mutator_fn("classify_equivalence_verdict")
+
+    expect_true(classify_equivalence_verdict("EQUIVALENT")$equivalent)
+    expect_false(classify_equivalence_verdict("not equivalent")$equivalent)
+    expect_equal(classify_equivalence_verdict("NOT_EQUIVALENT")$status, "NOT EQUIVALENT")
+    expect_true(is.na(classify_equivalence_verdict("DONT_KNOW")$equivalent))
+    expect_true(is.na(classify_equivalence_verdict(NA)$equivalent))
+    expect_true(is.na(classify_equivalence_verdict("gibberish")$equivalent))
+})
+
+test_that("fallback_line_verdicts does not bleed verdicts across mutants", {
+    fallback_line_verdicts <- resolve_mutator_fn("fallback_line_verdicts")
+
+    # m1 has no verdict on its own line; the EQUIVALENT belongs to m2. The old
+    # greedy `mid.*EQUIVALENT` regex would have matched m1 against m2's verdict.
+    content <- paste(
+        "Mutant a.R_a.R_001.R: analysis pending",
+        "Mutant a.R_a.R_002.R: EQUIVALENT",
+        sep = "\n"
+    )
+    v <- fallback_line_verdicts(content, c("a.R_a.R_001.R", "a.R_a.R_002.R"))
+    expect_true(is.na(v[["a.R_a.R_001.R"]]))
+    expect_equal(v[["a.R_a.R_002.R"]], "EQUIVALENT")
+
+    # "NOT EQUIVALENT" must not be read as EQUIVALENT.
+    expect_equal(fallback_line_verdicts("Mutant x: NOT EQUIVALENT", "x")[["x"]], "NOT_EQUIVALENT")
 })
 
 test_that("get_openai_config prefers environment variables", {

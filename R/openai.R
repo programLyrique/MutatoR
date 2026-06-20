@@ -51,11 +51,22 @@ identify_equivalent_mutants <- function(src_file, survived_mutants, api_config =
     for (file_name in names(mutants_by_file)) {
         file_mutants <- mutants_by_file[[file_name]]
 
-        # Prepare mutant information for the prompt
+        # Prepare mutant information for the prompt. When the mutated source
+        # file is available, include its full contents so the model reasons
+        # about the actual code rather than inferring it from the change note.
         mutant_details <- lapply(names(file_mutants), function(mid) {
+            m <- file_mutants[[mid]]
+            mutated_code <- NULL
+            if (!is.null(m$mutant_file) && file.exists(m$mutant_file)) {
+                mutated_code <- tryCatch(
+                    paste(readLines(m$mutant_file, warn = FALSE), collapse = "\n"),
+                    error = function(e) NULL
+                )
+            }
             list(
                 id = mid,
-                mutation_info = file_mutants[[mid]]$mutation_info
+                mutation_info = m$mutation_info,
+                mutated_code = mutated_code
             )
         })
 
@@ -81,34 +92,36 @@ identify_equivalent_mutants <- function(src_file, survived_mutants, api_config =
             cat("\n----------------------------------------\n\n")
 
             if (!is.null(parsed$choices) && length(parsed$choices) > 0) {
-                # Extract equivalent mutants information from response
+                # Extract the model's answer and parse it as structured JSON.
                 equivalent_analysis <- parsed$choices[[1]]$message$content
 
-                # Update the mutants with equivalence information
+                verdicts <- parse_equivalence_verdicts(equivalent_analysis)
+                if (is.null(verdicts)) {
+                    # The model did not return usable JSON; fall back to a strict
+                    # line-by-line scan that matches each id literally and only
+                    # accepts a verdict found on the *same* line. This avoids the
+                    # cross-mutant "bleed" a greedy regex over the whole response
+                    # would cause.
+                    verdicts <- fallback_line_verdicts(
+                        equivalent_analysis, names(file_mutants)
+                    )
+                }
+
                 for (mid in names(file_mutants)) {
-                    if (grepl(paste0(mid, ".*EQUIVALENT"), equivalent_analysis, ignore.case = TRUE) &&
-                        !grepl(paste0(mid, ".*NOT EQUIVALENT"), equivalent_analysis, ignore.case = TRUE)) {
-                        survived_mutants[[mid]]$equivalent <- TRUE
-                        survived_mutants[[mid]]$equivalence_status <- "EQUIVALENT"
+                    raw <- if (mid %in% names(verdicts)) verdicts[[mid]] else NA_character_
+                    cls <- classify_equivalence_verdict(raw)
+
+                    survived_mutants[[mid]]$equivalent <- cls$equivalent
+                    survived_mutants[[mid]]$equivalence_status <- cls$status
+
+                    if (isTRUE(cls$equivalent)) {
                         equiv_count <- equiv_count + 1
-                        cat(sprintf("Mutant %s identified as EQUIVALENT\n", mid))
-                    } else if (grepl(paste0(mid, ".*NOT EQUIVALENT"), equivalent_analysis, ignore.case = TRUE)) {
-                        survived_mutants[[mid]]$equivalent <- FALSE
-                        survived_mutants[[mid]]$equivalence_status <- "NOT EQUIVALENT"
+                    } else if (isFALSE(cls$equivalent)) {
                         not_equiv_count <- not_equiv_count + 1
-                        cat(sprintf("Mutant %s identified as NOT EQUIVALENT\n", mid))
-                    } else if (grepl(paste0(mid, ".*DONT KNOW"), equivalent_analysis, ignore.case = TRUE)) {
-                        survived_mutants[[mid]]$equivalent <- NA
-                        survived_mutants[[mid]]$equivalence_status <- "DONT KNOW"
-                        unknown_count <- unknown_count + 1
-                        cat(sprintf("Mutant %s: DONT KNOW\n", mid))
                     } else {
-                        # Default to unknown if no clear determination
-                        survived_mutants[[mid]]$equivalent <- NA
-                        survived_mutants[[mid]]$equivalence_status <- "DONT KNOW"
                         unknown_count <- unknown_count + 1
-                        cat(sprintf("Mutant %s: No clear determination, marking as DONT KNOW\n", mid))
                     }
+                    cat(sprintf("Mutant %s: %s\n", mid, cls$status))
                 }
             }
         }
@@ -133,21 +146,38 @@ identify_equivalent_mutants <- function(src_file, survived_mutants, api_config =
 #'
 #' @return A formatted prompt string for the OpenAI API
 create_equivalent_mutant_prompt <- function(original_code, mutant_details) {
-    mutant_info <- paste(sapply(mutant_details, function(m) {
-        paste0("Mutant ID: ", m$id, "\nMutation: ", m$mutation_info, "\n")
-    }), collapse = "\n")
+    ids <- vapply(mutant_details, function(m) as.character(m$id), character(1))
+
+    mutant_info <- paste(vapply(mutant_details, function(m) {
+        block <- paste0("- id: \"", m$id, "\"\n  change: ", m$mutation_info)
+        if (!is.null(m$mutated_code) && nzchar(m$mutated_code)) {
+            block <- paste0(block, "\n  mutated code:\n```r\n", m$mutated_code, "\n```")
+        }
+        block
+    }, character(1)), collapse = "\n\n")
 
     prompt <- paste0(
-        "Determine if the following mutants are equivalent to the original code. ",
-        "An equivalent mutant has the same behavior as the original code under all ",
-        "possible inputs.\n\n",
-        "Be conservative in your assessment. For each mutant, respond with one of these options:\n",
-        "- 'EQUIVALENT': Only if you are certain the mutant is functionally identical to the original code\n",
-        "- 'NOT EQUIVALENT': Only if you are certain the mutant changes behavior for some inputs\n",
-        "- 'DONT KNOW': If you are uncertain or cannot determine equivalence\n\n",
-        "Only answer with certainty if you are sure. If there's any doubt, use 'DONT KNOW'.\n\n",
-        "Original code:\n```\n", original_code, "\n```\n\n",
-        "Survived mutants:\n", mutant_info
+        "You are given an original R function and a set of mutants of it. Each ",
+        "mutant applies one small change (summarised under `change:`) to the ",
+        "original code; the full mutated source is shown under `mutated code:` ",
+        "when available -- reason about that code, using `change:` only to locate ",
+        "the edit.\n\n",
+        "A mutant is EQUIVALENT only if it produces the same observable behaviour ",
+        "as the original for every possible input -- identical return value, and ",
+        "the same errors, warnings and side effects. It is NOT_EQUIVALENT if there ",
+        "exists any input for which behaviour differs. If you cannot establish ",
+        "either with confidence, answer DONT_KNOW.\n\n",
+        "Reason about R semantics specifically: vectorisation and recycling, ",
+        "NA/NULL handling, integer vs double, coercion rules, lazy evaluation, and ",
+        "the difference between `&`/`&&` and `|`/`||`.\n\n",
+        "Respond with JSON only -- no prose, no markdown code fences -- as an ",
+        "object of exactly this shape:\n",
+        "{\"results\": [{\"id\": \"<mutant id>\", ",
+        "\"verdict\": \"EQUIVALENT\" | \"NOT_EQUIVALENT\" | \"DONT_KNOW\"}]}\n",
+        "Include exactly one entry for each of these ids: ",
+        paste(sprintf("\"%s\"", ids), collapse = ", "), ".\n\n",
+        "Original code:\n```r\n", original_code, "\n```\n\n",
+        "Mutants:\n", mutant_info, "\n"
     )
 
     return(prompt)
@@ -171,8 +201,12 @@ call_openai_api <- function(prompt, config) {
                     list(
                         role = "system",
                         content = paste0(
-                            "You are an expert in program analysis, ",
-                            "particularly in identifying equivalent mutants in code."
+                            "You are a precise program-analysis assistant for the R ",
+                            "language. You decide whether a mutant of an R function is ",
+                            "semantically equivalent to the original across all possible ",
+                            "inputs. You are conservative: when equivalence is not ",
+                            "certain, you answer DONT_KNOW rather than guess. You reply ",
+                            "with valid JSON only, with no prose or markdown."
                         )
                     ),
                     list(
@@ -268,3 +302,130 @@ get_openai_config <- function() {
     list(api_key = api_key, model = model)
 }
 # nocov end
+
+# Map a raw verdict token (from the model) to an equivalence flag and a stable
+# display status. Matching is on letters only, so "NOT_EQUIVALENT",
+# "NOT EQUIVALENT" and "not-equivalent" are treated identically, and anything
+# unrecognised (including NA) is conservatively reported as uncertain.
+classify_equivalence_verdict <- function(verdict) {
+    token <- toupper(gsub("[^A-Za-z]", "", as.character(verdict)[1]))
+    if (identical(token, "EQUIVALENT")) {
+        list(equivalent = TRUE, status = "EQUIVALENT")
+    } else if (identical(token, "NOTEQUIVALENT")) {
+        list(equivalent = FALSE, status = "NOT EQUIVALENT")
+    } else {
+        list(equivalent = NA, status = "DONT KNOW")
+    }
+}
+
+# Locate the outermost JSON array or object embedded in text, returning it as a
+# string (or NULL if none is found). Whichever of '[' or '{' appears first wins.
+extract_json_block <- function(text) {
+    text <- as.character(text)[1]
+    if (is.na(text)) {
+        return(NULL)
+    }
+    arr <- regexpr("[", text, fixed = TRUE)
+    obj <- regexpr("{", text, fixed = TRUE)
+
+    if (arr > 0 && (obj < 0 || arr < obj)) {
+        start <- arr
+        close <- "]"
+    } else if (obj > 0) {
+        start <- obj
+        close <- "}"
+    } else {
+        return(NULL)
+    }
+
+    hits <- gregexpr(close, text, fixed = TRUE)[[1]]
+    end <- if (length(hits) == 1 && hits[1] == -1) -1L else max(hits)
+    if (end > start) substr(text, start, end) else NULL
+}
+
+# Parse the model's response into a named character vector mapping mutant id ->
+# raw verdict string. Returns NULL when no usable JSON can be recovered, so the
+# caller can fall back to a line-based scan.
+parse_equivalence_verdicts <- function(content) {
+    if (is.null(content)) {
+        return(NULL)
+    }
+    content <- as.character(content)[1]
+    if (is.na(content) || !nzchar(content)) {
+        return(NULL)
+    }
+
+    cleaned <- gsub("```[A-Za-z]*", "", content)
+    cleaned <- gsub("```", "", cleaned)
+
+    block <- extract_json_block(cleaned)
+    if (is.null(block)) {
+        return(NULL)
+    }
+
+    parsed <- tryCatch(
+        jsonlite::fromJSON(block, simplifyDataFrame = TRUE),
+        error = function(e) NULL
+    )
+    if (is.null(parsed)) {
+        return(NULL)
+    }
+
+    records <- if (is.data.frame(parsed)) {
+        parsed
+    } else if (is.list(parsed) && is.data.frame(parsed$results)) {
+        parsed$results
+    } else if (is.list(parsed) && is.data.frame(parsed$mutants)) {
+        parsed$mutants
+    } else {
+        NULL
+    }
+
+    if (is.null(records) || !all(c("id", "verdict") %in% names(records))) {
+        return(NULL)
+    }
+
+    verdicts <- as.character(records$verdict)
+    names(verdicts) <- as.character(records$id)
+    verdicts
+}
+
+# Strict fallback when the response is not valid JSON: for each id, scan lines,
+# match the id literally (fixed = TRUE), and accept only a verdict found on the
+# same line. Returns a named character vector (NA where no verdict was found).
+fallback_line_verdicts <- function(content, ids) {
+    out <- rep(NA_character_, length(ids))
+    names(out) <- ids
+    if (is.null(content)) {
+        return(out)
+    }
+    content <- as.character(content)[1]
+    if (is.na(content) || !nzchar(content)) {
+        return(out)
+    }
+
+    lines <- strsplit(content, "\n", fixed = TRUE)[[1]]
+    for (id in ids) {
+        for (ln in lines) {
+            if (!grepl(id, ln, fixed = TRUE)) {
+                next
+            }
+            up <- toupper(ln)
+            # Check NOT EQUIVALENT before EQUIVALENT (substring of the former).
+            verdict <- if (grepl("NOT", up, fixed = TRUE) && grepl("EQUIVALENT", up, fixed = TRUE)) {
+                "NOT_EQUIVALENT"
+            } else if (grepl("EQUIVALENT", up, fixed = TRUE)) {
+                "EQUIVALENT"
+            } else if (grepl("KNOW", up, fixed = TRUE)) {
+                "DONT_KNOW"
+            } else {
+                NA_character_
+            }
+            if (!is.na(verdict)) {
+                out[[id]] <- verdict
+                break
+            }
+        }
+    }
+    out
+}

@@ -587,7 +587,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
       )
 
       id <- paste(basename(src), basename(m$path), sep = "_")
-      mutants[[id]] <- list(pkg = pkg_copy, info = m$info, src = src)
+      mutants[[id]] <- list(pkg = pkg_copy, info = m$info, src = src, mutant_file = m$path)
     }
   }
 
@@ -735,7 +735,8 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
       path = pkg_copy_dir,
       mutation_info = mutation_info,
       status = status,
-      src = mutants[[mutant_id]]$src
+      src = mutants[[mutant_id]]$src,
+      mutant_file = mutants[[mutant_id]]$mutant_file
     )
     test_results[[mutant_id]] <- status
   }
