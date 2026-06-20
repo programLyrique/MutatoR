@@ -171,7 +171,7 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL) {
   base_name <- basename(src_file)
   idx <- 1L
 
-  cat(sprintf("Generated %d AST-based mutants for %s\n", length(raw_mutations), base_name))
+  message(sprintf("Generated %d AST-based mutants for %s", length(raw_mutations), base_name))
 
   # AST-driven mutants
   for (m in raw_mutations) {
@@ -252,6 +252,9 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL) {
 #' }
 #'
 #' @examples
+#' # Wrapped in \donttest{}: it loads and test-runs a throwaway package, which
+#' # is too slow/heavy for routine automated checks.
+#' \donttest{
 #' pkg <- file.path(tempdir(), "examplepkg")
 #' dir.create(file.path(pkg, "R"), recursive = TRUE, showWarnings = FALSE)
 #' dir.create(file.path(pkg, "tests", "testthat"), recursive = TRUE, showWarnings = FALSE)
@@ -271,6 +274,7 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL) {
 #' )
 #' result <- mutate_package(pkg, cores = 1, max_mutants = 1, timeout_seconds = 10)
 #' names(result)
+#' }
 #'
 #' @export
 mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
@@ -363,6 +367,8 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
 
     passed <- tryCatch(
       {
+        # TODO: switch to reporter = "silent" once stable; the default reporter's
+        # per-mutant output is kept for now because it is useful for debugging.
         tr <- testthat::test_dir("tests/testthat")
         num_failed <- sum(tr$failed)
         if (num_failed > 0) {
@@ -619,8 +625,8 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
   }
 
   if (isFullLog) {
-    cat(sprintf(
-      "Baseline runtime: %.2fs | Mutant timeout: %.2fs (%s)\n",
+    message(sprintf(
+      "Baseline runtime: %.2fs | Mutant timeout: %.2fs (%s)",
       baseline_elapsed_seconds,
       effective_timeout_seconds,
       if (is.null(timeout_seconds)) {
@@ -714,7 +720,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     pkg_copy_dir <- mutants[[mutant_id]]$pkg
 
     if (is.null(test_result) || length(test_result) == 0) {
-      cat(sprintf("Mutant %s: Compilation/test execution failed, marking as KILLED.\n", mutant_id))
+      message(sprintf("Mutant %s: Compilation/test execution failed, marking as KILLED.", mutant_id))
       test_result <- "KILLED"
     }
 
@@ -729,9 +735,9 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     mutation_info <- mutants[[mutant_id]]$info
 
     if (isFullLog) {
-      cat(sprintf("Mutant %s: %s\n", mutant_id, status))
-      cat(sprintf("Mutation info: %s\n", mutation_info))
-      cat(sprintf("   Result: %s\n\n", status))
+      message(sprintf("Mutant %s: %s", mutant_id, status))
+      message(sprintf("Mutation info: %s", mutation_info))
+      message(sprintf("   Result: %s\n", status))
     }
 
     package_mutants[[mutant_id]] <- list(
@@ -756,7 +762,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
 
   # Identify equivalent mutants among survived mutants only if detectEqMutants is TRUE
   if (detectEqMutants && length(survived_mutants) > 0) {
-    cat("\nAnalyzing equivalent mutants among survived mutants...\n")
+    message("Analyzing equivalent mutants among survived mutants...")
     # Group survived mutants by their originating source file. The source path
     # is carried on each mutant record, so we never have to recover it from the
     # mutant ID (filenames frequently contain '_' and '.').
@@ -816,21 +822,21 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     0
   }
 
-  cat("\nMutation Testing Summary:\n")
-  cat(sprintf("  Total mutants:    %d\n", total_mutants))
-  cat(sprintf("  Killed:           %d\n", killed))
-  cat(sprintf("  Hanged:           %d\n", hanged))
-  cat(sprintf("  Survived:         %d\n", survived))
+  message("Mutation Testing Summary:")
+  message(sprintf("  Total mutants:    %d", total_mutants))
+  message(sprintf("  Killed:           %d", killed))
+  message(sprintf("  Hanged:           %d", hanged))
+  message(sprintf("  Survived:         %d", survived))
 
   # Only print equivalent mutants and adjusted score if detectEqMutants is TRUE
   if (detectEqMutants) {
-    cat(sprintf("  Equivalent:       %d\n", equivalent))
-    cat(sprintf("  Not Equivalent:   %d\n", not_equivalent))
-    cat(sprintf("  Uncertain:        %d\n", uncertain))
-    cat(sprintf("  Mutation Score:   %.2f%%\n", mutation_score))
-    cat(sprintf("  Adjusted Score:   %.2f%% (excluding equivalent mutants)\n", adjusted_mutation_score))
+    message(sprintf("  Equivalent:       %d", equivalent))
+    message(sprintf("  Not Equivalent:   %d", not_equivalent))
+    message(sprintf("  Uncertain:        %d", uncertain))
+    message(sprintf("  Mutation Score:   %.2f%%", mutation_score))
+    message(sprintf("  Adjusted Score:   %.2f%% (excluding equivalent mutants)", adjusted_mutation_score))
   } else {
-    cat(sprintf("  Mutation Score:   %.2f%%\n", mutation_score))
+    message(sprintf("  Mutation Score:   %.2f%%", mutation_score))
   }
 
   invisible(list(package_mutants = package_mutants, test_results = test_results))

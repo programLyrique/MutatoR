@@ -59,6 +59,9 @@ with \code{--install-tests} and runs \code{tools::testInstalledPackage()}.
 }
 }
 \examples{
+# Wrapped in \donttest{}: it loads and test-runs a throwaway package, which
+# is too slow/heavy for routine automated checks.
+\donttest{
 pkg <- file.path(tempdir(), "examplepkg")
 dir.create(file.path(pkg, "R"), recursive = TRUE, showWarnings = FALSE)
 dir.create(file.path(pkg, "tests", "testthat"), recursive = TRUE, showWarnings = FALSE)
@@ -78,5 +81,6 @@ writeLines(
 )
 result <- mutate_package(pkg, cores = 1, max_mutants = 1, timeout_seconds = 10)
 names(result)
+}
 
 }

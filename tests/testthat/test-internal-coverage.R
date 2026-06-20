@@ -589,7 +589,10 @@ test_that("mutate_package computes equivalent mutant summary when enabled", {
         .package = "mutator"
     )
 
-    output <- capture.output({
+    result <- NULL
+    # Progress and the summary are now emitted via message() (stderr), so
+    # capture conditions rather than stdout.
+    output <- testthat::capture_messages({
         result <- mutate_package(
             pkg_dir = pkg_info$pkg_dir,
             cores = 1,

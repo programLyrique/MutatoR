@@ -73,11 +73,12 @@ identify_equivalent_mutants <- function(src_file, survived_mutants, api_config =
         # Create the prompt
         prompt <- create_equivalent_mutant_prompt(orig_code, mutant_details)
 
-        cat("\nAnalyzing mutants with OpenAI API...\n")
-        cat("Prompt being sent to OpenAI:\n")
-        cat("----------------------------------------\n")
-        cat(prompt)
-        cat("\n----------------------------------------\n\n")
+        verbose <- isTRUE(getOption("mutator.verbose", FALSE))
+
+        message("Analyzing mutants with OpenAI API...")
+        if (verbose) {
+            message("Prompt being sent to OpenAI:\n", prompt)
+        }
 
         # Call OpenAI API
         response <- call_openai_api(prompt, api_config)
@@ -86,10 +87,9 @@ identify_equivalent_mutants <- function(src_file, survived_mutants, api_config =
         if (!is.null(response)) {
             parsed <- response
 
-            cat("Answer received from OpenAI API\n")
-            cat("----------------------------------------\n")
-            cat(parsed$choices[[1]]$message$content)
-            cat("\n----------------------------------------\n\n")
+            if (verbose) {
+                message("Answer received from OpenAI API:\n", parsed$choices[[1]]$message$content)
+            }
 
             if (!is.null(parsed$choices) && length(parsed$choices) > 0) {
                 # Extract the model's answer and parse it as structured JSON.
@@ -121,17 +121,16 @@ identify_equivalent_mutants <- function(src_file, survived_mutants, api_config =
                     } else {
                         unknown_count <- unknown_count + 1
                     }
-                    cat(sprintf("Mutant %s: %s\n", mid, cls$status))
+                    message(sprintf("Mutant %s: %s", mid, cls$status))
                 }
             }
         }
     }
 
-    cat("\nEquivalence Analysis Summary:\n")
-    cat(sprintf("  Equivalent:     %d\n", equiv_count))
-    cat(sprintf("  Not Equivalent: %d\n", not_equiv_count))
-    cat(sprintf("  Uncertain:      %d\n", unknown_count))
-    cat("\n")
+    message("Equivalence Analysis Summary:")
+    message(sprintf("  Equivalent:     %d", equiv_count))
+    message(sprintf("  Not Equivalent: %d", not_equiv_count))
+    message(sprintf("  Uncertain:      %d", unknown_count))
 
     return(survived_mutants)
 }

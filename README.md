@@ -136,6 +136,10 @@ If nothing is configured, the model defaults to `gpt-4` and the base URL to the
 public OpenAI API. Set `base_url` to target a self-hosted or alternative
 OpenAI-compatible service (for example `http://localhost:11434/v1`).
 
+Progress and the results summary are emitted via `message()` (so they can be
+silenced with `suppressMessages()`). The full prompts and model responses are
+not printed by default; set `options(mutator.verbose = TRUE)` to log them.
+
 ## Mutation Operators
 
 mutator implements a wide range of mutation operators to thoroughly test your code:
