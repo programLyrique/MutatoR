@@ -55,12 +55,14 @@ as \code{devtools::test()} does. Note this only affects tests the package
 actually guards; unguarded network tests still run.}
 }
 \value{
-An invisible list with two components:
+An invisible list with three components:
 \describe{
 \item{\code{package_mutants}}{Named list with mutant path, mutation info, status,
 and optional equivalence flags.}
 \item{\code{test_results}}{Named list mapping mutant IDs to statuses:
 \code{"KILLED"}, \code{"SURVIVED"}, or \code{"HANG"}.}
+\item{\code{timing}}{Named list of phase durations in seconds: \code{baseline},
+\code{generation}, \code{test_execution}, and \code{equivalence_detection}.}
 }
 }
 \description{

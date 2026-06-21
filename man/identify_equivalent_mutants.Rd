@@ -4,7 +4,13 @@
 \alias{identify_equivalent_mutants}
 \title{Identify equivalent mutants using OpenAI API}
 \usage{
-identify_equivalent_mutants(src_file, survived_mutants, api_config = NULL)
+identify_equivalent_mutants(
+  src_file,
+  survived_mutants,
+  api_config = NULL,
+  batch_size = 25,
+  workers = 1
+)
 }
 \arguments{
 \item{src_file}{Path to the original source file}
@@ -12,6 +18,13 @@ identify_equivalent_mutants(src_file, survived_mutants, api_config = NULL)
 \item{survived_mutants}{List of mutants that survived test execution}
 
 \item{api_config}{Optional API configuration (will be loaded if NULL)}
+
+\item{batch_size}{Maximum number of mutants sent in a single API request.
+Smaller batches keep each response short enough to avoid truncation (which
+silently drops verdicts) and let batches run concurrently. Defaults to 25.}
+
+\item{workers}{Number of API requests to run concurrently (requires a
+forking platform). Defaults to 1 (sequential).}
 }
 \value{
 Updated list of survived mutants with equivalence information

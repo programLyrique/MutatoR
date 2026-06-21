@@ -149,6 +149,125 @@ test_that("fallback_line_verdicts does not bleed verdicts across mutants", {
     expect_equal(fallback_line_verdicts("Mutant x: NOT EQUIVALENT", "x")[["x"]], "NOT_EQUIVALENT")
 })
 
+test_that("identify_equivalent_mutants batches requests and merges all verdicts", {
+    identify_equivalent_mutants <- resolve_mutator_fn("identify_equivalent_mutants")
+
+    src <- tempfile(fileext = ".R")
+    writeLines("f <- function(x) x + 1", src)
+    on.exit(unlink(src), add = TRUE)
+
+    n <- 7
+    survived <- list()
+    for (i in seq_len(n)) {
+        survived[[sprintf("m_%03d", i)]] <- list(mutation_info = sprintf("change %d", i))
+    }
+
+    calls <- 0
+    testthat::local_mocked_bindings(
+        # Stand in for the network call: answer only the ids in *this* batch's
+        # prompt, so we verify each batch is self-contained and all merge.
+        call_openai_api = function(prompt, config) {
+            calls <<- calls + 1
+            ids <- unique(gsub('"', "", regmatches(prompt, gregexpr('"m_[0-9]+"', prompt))[[1]]))
+            entries <- vapply(ids, function(id) {
+                sprintf('{"id":"%s","verdict":"NOT_EQUIVALENT"}', id)
+            }, character(1))
+            content <- sprintf('{"results":[%s]}', paste(entries, collapse = ","))
+            list(choices = list(list(message = list(content = content))))
+        },
+        .package = "mutator"
+    )
+
+    res <- identify_equivalent_mutants(
+        src, survived,
+        api_config = list(api_key = "k", model = "m"),
+        batch_size = 3, workers = 1
+    )
+
+    # 7 mutants / batch of 3 -> 3 requests (3, 3, 1).
+    expect_equal(calls, 3)
+    # Every mutant is classified -- none dropped across batches.
+    expect_length(res, n)
+    expect_true(all(vapply(
+        res, function(m) identical(m$equivalence_status, "NOT EQUIVALENT"), logical(1)
+    )))
+})
+
+test_that("make_unified_diff emits a minimal single hunk", {
+    make_unified_diff <- resolve_mutator_fn("make_unified_diff")
+
+    orig <- c("a <- 1", "if (x < 0) y <- 2", "z <- 3")
+    mut <- c("a <- 1", "if (x > 0) y <- 2", "z <- 3")
+    d <- make_unified_diff(orig, mut, context = 0)
+    expect_match(d, "^@@")
+    expect_match(d, "-if (x < 0) y <- 2", fixed = TRUE)
+    expect_match(d, "+if (x > 0) y <- 2", fixed = TRUE)
+    # With no context, unchanged surrounding lines are not included.
+    expect_no_match(d, "z <- 3", fixed = TRUE)
+    expect_no_match(d, "a <- 1", fixed = TRUE)
+
+    # A line deletion shows a '-' line and NO '+' change line (guards the R
+    # paste0("+", character(0)) == "+" quirk).
+    del <- make_unified_diff(c("keep1", "drop", "keep2"), c("keep1", "keep2"), context = 0)
+    expect_match(del, "-drop", fixed = TRUE)
+    expect_false(any(grepl("^\\+", strsplit(del, "\n", fixed = TRUE)[[1]])))
+
+    # Identical inputs produce no diff.
+    expect_equal(make_unified_diff(c("a", "b"), c("a", "b")), "")
+})
+
+test_that("create_equivalent_mutant_prompt renders a unified diff when provided", {
+    create_equivalent_mutant_prompt <- resolve_mutator_fn("create_equivalent_mutant_prompt")
+
+    prompt <- create_equivalent_mutant_prompt(
+        original_code = "f <- function(x) x + 1",
+        mutant_details = list(
+            list(id = "f_001", mutation_info = "'+' -> '-'",
+                 diff = "@@ -1,1 +1,1 @@\n-f <- function(x) x + 1\n+f <- function(x) x - 1")
+        )
+    )
+    expect_match(prompt, "\n  diff:\n```diff\n", fixed = TRUE)
+    expect_match(prompt, "+f <- function(x) x - 1", fixed = TRUE)
+})
+
+test_that("equivalence reasons are captured only for EQUIVALENT verdicts", {
+    parse_equivalence_verdicts <- resolve_mutator_fn("parse_equivalence_verdicts")
+    identify_equivalent_mutants <- resolve_mutator_fn("identify_equivalent_mutants")
+
+    # The parser attaches per-id reasons as the "reasons" attribute.
+    j <- paste0(
+        '{"results":[{"id":"a","verdict":"EQUIVALENT","reason":"same for all x"},',
+        '{"id":"b","verdict":"NOT_EQUIVALENT"}]}'
+    )
+    v <- parse_equivalence_verdicts(j)
+    expect_equal(v[["a"]], "EQUIVALENT")
+    expect_equal(attr(v, "reasons")[["a"]], "same for all x")
+    expect_false("b" %in% names(attr(v, "reasons")))
+
+    # End to end: the reason is stored on the equivalent mutant only.
+    src <- tempfile(fileext = ".R")
+    writeLines("f <- function(x) x + 1", src)
+    on.exit(unlink(src), add = TRUE)
+    survived <- list(
+        m_eq = list(mutation_info = "'+' -> '-'"),
+        m_neq = list(mutation_info = "'+' -> '*'")
+    )
+    testthat::local_mocked_bindings(
+        call_openai_api = function(prompt, config) {
+            list(choices = list(list(message = list(content = paste0(
+                '{"results":[{"id":"m_eq","verdict":"EQUIVALENT","reason":"x is unused"},',
+                '{"id":"m_neq","verdict":"NOT_EQUIVALENT"}]}'
+            )))))
+        },
+        .package = "mutator"
+    )
+    res <- identify_equivalent_mutants(src, survived, api_config = list(api_key = "k", model = "m"))
+    expect_true(isTRUE(res$m_eq$equivalent))
+    expect_equal(res$m_eq$equivalence_reason, "x is unused")
+    expect_false(isTRUE(res$m_neq$equivalent))
+    expect_null(res$m_neq$equivalence_reason)
+})
+
 # Save/restore a single environment variable across a test.
 restore_env_var <- function(name, value) {
     if (is.na(value)) {
@@ -647,7 +766,7 @@ test_that("mutate_package computes equivalent mutant summary when enabled", {
                 list(path = mut_paths[[3]], info = "m3")
             )
         },
-        identify_equivalent_mutants = function(src_file, file_mutants, api_config = NULL) {
+        identify_equivalent_mutants = function(src_file, file_mutants, api_config = NULL, ...) {
             ids <- names(file_mutants)
             if (length(ids) >= 1) {
                 file_mutants[[ids[[1]]]]$equivalent <- TRUE

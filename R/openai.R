@@ -7,6 +7,11 @@
 #' @param src_file Path to the original source file
 #' @param survived_mutants List of mutants that survived test execution
 #' @param api_config Optional API configuration (will be loaded if NULL)
+#' @param batch_size Maximum number of mutants sent in a single API request.
+#'   Smaller batches keep each response short enough to avoid truncation (which
+#'   silently drops verdicts) and let batches run concurrently. Defaults to 25.
+#' @param workers Number of API requests to run concurrently (requires a
+#'   forking platform). Defaults to 1 (sequential).
 #'
 #' @return Updated list of survived mutants with equivalence information
 #'
@@ -21,7 +26,8 @@
 #' ))
 #'
 #' @export
-identify_equivalent_mutants <- function(src_file, survived_mutants, api_config = NULL) {
+identify_equivalent_mutants <- function(src_file, survived_mutants, api_config = NULL,
+                                        batch_size = 25, workers = 1) {
     # Load API configuration if not provided
     if (is.null(api_config)) {
         api_config <- get_openai_config()
@@ -33,97 +39,131 @@ identify_equivalent_mutants <- function(src_file, survived_mutants, api_config =
         return(survived_mutants)
     }
 
-    # Read original source code
-    orig_code <- paste(readLines(src_file), collapse = "\n")
+    ids <- names(survived_mutants)
+    if (length(ids) == 0) {
+        return(survived_mutants)
+    }
 
-    # Every mutant passed in is compared against this single `src_file`, so they
-    # form one group. Keying by `basename(src_file)` avoids recovering the file
-    # name from the mutant ID (which is unreliable: filenames contain '_').
-    mutants_by_file <- list()
-    mutants_by_file[[basename(src_file)]] <- survived_mutants
+    # Read original source code once; it is shared by every request. Each mutant
+    # is shown to the model as a small *unified diff* of its edit (plus a short
+    # `change:` label) -- compact, unambiguous, and in a format LLMs read
+    # natively, without embedding the full mutated file per mutant.
+    orig_raw_lines <- readLines(src_file, warn = FALSE)
+    orig_code <- paste(orig_raw_lines, collapse = "\n")
 
-    # Track counts for each category
-    equiv_count <- 0
-    not_equiv_count <- 0
-    unknown_count <- 0
+    # Two references are needed to produce a clean (single-hunk) diff:
+    #  - AST mutants are the whole file *re-deparsed* with one expression
+    #    changed, so they must be diffed against a consistently re-deparsed
+    #    original (otherwise reformatting shows up as spurious changes);
+    #  - line-deletion mutants are the raw original minus one line, so they are
+    #    diffed against the raw original.
+    orig_deparsed_lines <- tryCatch(
+        unlist(lapply(parse(src_file, keep.source = FALSE), deparse), use.names = FALSE),
+        error = function(e) orig_raw_lines
+    )
 
-    # Process each source file
-    for (file_name in names(mutants_by_file)) {
-        file_mutants <- mutants_by_file[[file_name]]
+    mutant_diff <- function(mid) {
+        m <- survived_mutants[[mid]]
+        if (is.null(m$mutant_file) || !file.exists(m$mutant_file)) {
+            return(NULL)
+        }
+        mut_lines <- tryCatch(readLines(m$mutant_file, warn = FALSE), error = function(e) NULL)
+        if (is.null(mut_lines)) {
+            return(NULL)
+        }
+        is_line_deletion <- is.character(m$mutation_info) &&
+            any(grepl("deleted line", m$mutation_info, fixed = TRUE))
+        reference <- if (is_line_deletion) orig_raw_lines else orig_deparsed_lines
+        diff <- make_unified_diff(reference, mut_lines)
+        if (nzchar(diff)) diff else NULL
+    }
 
-        # Prepare mutant information for the prompt. When the mutated source
-        # file is available, include its full contents so the model reasons
-        # about the actual code rather than inferring it from the change note.
-        mutant_details <- lapply(names(file_mutants), function(mid) {
-            m <- file_mutants[[mid]]
-            mutated_code <- NULL
-            if (!is.null(m$mutant_file) && file.exists(m$mutant_file)) {
-                mutated_code <- tryCatch(
-                    paste(readLines(m$mutant_file, warn = FALSE), collapse = "\n"),
-                    error = function(e) NULL
-                )
-            }
+    # Split the mutants into bounded batches so no single response is large
+    # enough to be slow or to truncate (which previously dropped verdicts).
+    batch_size <- max(1L, as.integer(batch_size))
+    batches <- unname(split(ids, ceiling(seq_along(ids) / batch_size)))
+
+    verbose <- isTRUE(getOption("mutator.verbose", FALSE))
+
+    classify_batch <- function(batch_ids) {
+        mutant_details <- lapply(batch_ids, function(mid) {
             list(
                 id = mid,
-                mutation_info = m$mutation_info,
-                mutated_code = mutated_code
+                mutation_info = survived_mutants[[mid]]$mutation_info,
+                diff = mutant_diff(mid)
             )
         })
-
-        # Create the prompt
         prompt <- create_equivalent_mutant_prompt(orig_code, mutant_details)
-
-        verbose <- isTRUE(getOption("mutator.verbose", FALSE))
-
-        message("Analyzing mutants with OpenAI API...")
         if (verbose) {
             message("Prompt being sent to OpenAI:\n", prompt)
         }
-
-        # Call OpenAI API
         response <- call_openai_api(prompt, api_config)
+        if (is.null(response) || is.null(response$choices) || length(response$choices) == 0) {
+            return(NULL)
+        }
+        content <- response$choices[[1]]$message$content
+        if (verbose) {
+            message("Answer received from OpenAI API:\n", content)
+        }
+        verdicts <- parse_equivalence_verdicts(content)
+        if (is.null(verdicts)) {
+            # Not usable JSON: fall back to a strict per-line scan (matches each
+            # id literally, verdict must be on the same line) to avoid the
+            # cross-mutant "bleed" a greedy whole-response regex would cause.
+            verdicts <- fallback_line_verdicts(content, batch_ids)
+        }
+        verdicts
+    }
 
-        # Process response
-        if (!is.null(response)) {
-            parsed <- response
+    message(sprintf(
+        "Analyzing %d survived mutant(s) for %s in %d batch(es)...",
+        length(ids), basename(src_file), length(batches)
+    ))
 
-            if (verbose) {
-                message("Answer received from OpenAI API:\n", parsed$choices[[1]]$message$content)
+    # API calls are network-bound, so run batches concurrently when possible.
+    use_parallel <- workers > 1 && length(batches) > 1 && future::supportsMulticore()
+    batch_results <- if (use_parallel) {
+        parallel::mclapply(batches, classify_batch, mc.cores = min(workers, length(batches)))
+    } else {
+        lapply(batches, classify_batch)
+    }
+
+    # Merge the per-batch id -> raw-verdict maps (and the id -> reason maps the
+    # model supplies for EQUIVALENT verdicts).
+    verdicts <- character(0)
+    reasons <- character(0)
+    for (r in batch_results) {
+        if (!is.null(r) && !inherits(r, "try-error")) {
+            verdicts <- c(verdicts, r)
+            r_reasons <- attr(r, "reasons")
+            if (!is.null(r_reasons)) {
+                reasons <- c(reasons, r_reasons)
             }
+        }
+    }
 
-            if (!is.null(parsed$choices) && length(parsed$choices) > 0) {
-                # Extract the model's answer and parse it as structured JSON.
-                equivalent_analysis <- parsed$choices[[1]]$message$content
-
-                verdicts <- parse_equivalence_verdicts(equivalent_analysis)
-                if (is.null(verdicts)) {
-                    # The model did not return usable JSON; fall back to a strict
-                    # line-by-line scan that matches each id literally and only
-                    # accepts a verdict found on the *same* line. This avoids the
-                    # cross-mutant "bleed" a greedy regex over the whole response
-                    # would cause.
-                    verdicts <- fallback_line_verdicts(
-                        equivalent_analysis, names(file_mutants)
-                    )
-                }
-
-                for (mid in names(file_mutants)) {
-                    raw <- if (mid %in% names(verdicts)) verdicts[[mid]] else NA_character_
-                    cls <- classify_equivalence_verdict(raw)
-
-                    survived_mutants[[mid]]$equivalent <- cls$equivalent
-                    survived_mutants[[mid]]$equivalence_status <- cls$status
-
-                    if (isTRUE(cls$equivalent)) {
-                        equiv_count <- equiv_count + 1
-                    } else if (isFALSE(cls$equivalent)) {
-                        not_equiv_count <- not_equiv_count + 1
-                    } else {
-                        unknown_count <- unknown_count + 1
-                    }
-                    message(sprintf("Mutant %s: %s", mid, cls$status))
-                }
+    equiv_count <- 0
+    not_equiv_count <- 0
+    unknown_count <- 0
+    for (mid in ids) {
+        raw <- if (mid %in% names(verdicts)) verdicts[[mid]] else NA_character_
+        cls <- classify_equivalence_verdict(raw)
+        survived_mutants[[mid]]$equivalent <- cls$equivalent
+        survived_mutants[[mid]]$equivalence_status <- cls$status
+        if (isTRUE(cls$equivalent)) {
+            equiv_count <- equiv_count + 1
+            # Reasons are only requested (and stored) for EQUIVALENT mutants --
+            # the rare, high-stakes calls worth auditing.
+            if (mid %in% names(reasons)) {
+                survived_mutants[[mid]]$equivalence_reason <- unname(reasons[[mid]])
+                message(sprintf("  EQUIVALENT %s: %s", mid, reasons[[mid]]))
+            } else {
+                message(sprintf("  EQUIVALENT %s (no reason given)", mid))
             }
+        } else if (isFALSE(cls$equivalent)) {
+            not_equiv_count <- not_equiv_count + 1
+        } else {
+            unknown_count <- unknown_count + 1
         }
     }
 
@@ -149,6 +189,9 @@ create_equivalent_mutant_prompt <- function(original_code, mutant_details) {
 
     mutant_info <- paste(vapply(mutant_details, function(m) {
         block <- paste0("- id: \"", m$id, "\"\n  change: ", m$mutation_info)
+        if (!is.null(m$diff) && nzchar(m$diff)) {
+            block <- paste0(block, "\n  diff:\n```diff\n", m$diff, "\n```")
+        }
         if (!is.null(m$mutated_code) && nzchar(m$mutated_code)) {
             block <- paste0(block, "\n  mutated code:\n```r\n", m$mutated_code, "\n```")
         }
@@ -157,10 +200,9 @@ create_equivalent_mutant_prompt <- function(original_code, mutant_details) {
 
     prompt <- paste0(
         "You are given an original R function and a set of mutants of it. Each ",
-        "mutant applies one small change (summarised under `change:`) to the ",
-        "original code; the full mutated source is shown under `mutated code:` ",
-        "when available -- reason about that code, using `change:` only to locate ",
-        "the edit.\n\n",
+        "mutant applies one small change to the original code, shown as a unified ",
+        "diff under `diff:` (the `change:` line is a short label for it). Reason ",
+        "about the edit shown in the diff, applied to the original code above.\n\n",
         "A mutant is EQUIVALENT only if it produces the same observable behaviour ",
         "as the original for every possible input -- identical return value, and ",
         "the same errors, warnings and side effects. It is NOT_EQUIVALENT if there ",
@@ -172,7 +214,11 @@ create_equivalent_mutant_prompt <- function(original_code, mutant_details) {
         "Respond with JSON only -- no prose, no markdown code fences -- as an ",
         "object of exactly this shape:\n",
         "{\"results\": [{\"id\": \"<mutant id>\", ",
-        "\"verdict\": \"EQUIVALENT\" | \"NOT_EQUIVALENT\" | \"DONT_KNOW\"}]}\n",
+        "\"verdict\": \"EQUIVALENT\" | \"NOT_EQUIVALENT\" | \"DONT_KNOW\", ",
+        "\"reason\": \"<one short sentence>\"}]}\n",
+        "Include `reason` ONLY when the verdict is EQUIVALENT, explaining why the ",
+        "mutant is behaviourally identical to the original for every input; omit ",
+        "it for NOT_EQUIVALENT and DONT_KNOW.\n",
         "Include exactly one entry for each of these ids: ",
         paste(sprintf("\"%s\"", ids), collapse = ", "), ".\n\n",
         "Original code:\n```r\n", original_code, "\n```\n\n",
@@ -395,6 +441,54 @@ build_chat_completions_url <- function(base_url) {
     }
 }
 
+# Build a minimal one-hunk unified diff between two vectors of lines. A mutant
+# differs from the original in a single contiguous region, so a full LCS diff is
+# unnecessary: we match the common prefix and suffix and emit only the region
+# between them (with a few lines of context). Returns "" when the inputs are
+# identical.
+make_unified_diff <- function(orig_lines, mut_lines, context = 3L) {
+    no <- length(orig_lines)
+    nm <- length(mut_lines)
+
+    p <- 0L
+    while (p < min(no, nm) && identical(orig_lines[[p + 1L]], mut_lines[[p + 1L]])) {
+        p <- p + 1L
+    }
+    s <- 0L
+    while (s < (min(no, nm) - p) && identical(orig_lines[[no - s]], mut_lines[[nm - s]])) {
+        s <- s + 1L
+    }
+
+    o_from <- p + 1L
+    o_to <- no - s
+    m_from <- p + 1L
+    m_to <- nm - s
+    o_changed <- if (o_from <= o_to) orig_lines[o_from:o_to] else character(0)
+    m_changed <- if (m_from <= m_to) mut_lines[m_from:m_to] else character(0)
+    if (length(o_changed) == 0 && length(m_changed) == 0) {
+        return("")
+    }
+
+    ctx_start <- max(1L, p - context + 1L)
+    ctx_before <- if (p >= ctx_start) orig_lines[ctx_start:p] else character(0)
+    after_start <- no - s + 1L
+    after_end <- min(no, after_start + context - 1L)
+    ctx_after <- if (after_start <= after_end) orig_lines[after_start:after_end] else character(0)
+
+    # Prefix each group with its marker, but only when non-empty: note that
+    # paste0("+", character(0)) is "+" (not character(0)) in R, which would emit
+    # a spurious line for pure deletions/insertions or empty context.
+    marked <- function(marker, lines) if (length(lines)) paste0(marker, lines) else character(0)
+    hunk <- c(
+        sprintf("@@ -%d,%d +%d,%d @@", o_from, length(o_changed), m_from, length(m_changed)),
+        marked(" ", ctx_before),
+        marked("-", o_changed),
+        marked("+", m_changed),
+        marked(" ", ctx_after)
+    )
+    paste(hunk, collapse = "\n")
+}
+
 # Map a raw verdict token (from the model) to an equivalence flag and a stable
 # display status. Matching is on letters only, so "NOT_EQUIVALENT",
 # "NOT EQUIVALENT" and "not-equivalent" are treated identically, and anything
@@ -437,7 +531,10 @@ extract_json_block <- function(text) {
 
 # Parse the model's response into a named character vector mapping mutant id ->
 # raw verdict string. Returns NULL when no usable JSON can be recovered, so the
-# caller can fall back to a line-based scan.
+# caller can fall back to a line-based scan. Any per-id `reason` strings the
+# model supplied (requested only for EQUIVALENT verdicts) are attached as the
+# "reasons" attribute (a named character vector), so the return type stays a
+# plain verdict vector for existing callers.
 parse_equivalence_verdicts <- function(content) {
     if (is.null(content)) {
         return(NULL)
@@ -479,6 +576,15 @@ parse_equivalence_verdicts <- function(content) {
 
     verdicts <- as.character(records$verdict)
     names(verdicts) <- as.character(records$id)
+
+    if ("reason" %in% names(records)) {
+        reasons <- as.character(records$reason)
+        names(reasons) <- as.character(records$id)
+        reasons <- reasons[!is.na(reasons) & nzchar(reasons)]
+        if (length(reasons) > 0) {
+            attr(verdicts, "reasons") <- reasons
+        }
+    }
     verdicts
 }
 

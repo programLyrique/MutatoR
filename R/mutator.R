@@ -955,22 +955,51 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     # file in `config_dir` rather than depending on the working directory.
     api_config <- get_openai_config(dir = config_dir)
 
-    # Process each source file
+    # Build a flat list of work units across ALL files, each a single batch
+    # (one API request) of up to `eq_batch_size` survivors from one file. This
+    # way the parallel pool is shape-agnostic: many files with few survivors
+    # each, or few files with many survivors each, all parallelize across the
+    # available workers equally. (Kept in sync with identify_equivalent_mutants'
+    # default batch size so each chunk is exactly one request.)
+    eq_batch_size <- 25L
+    chunks <- list()
     for (src_file in src_files) {
-      # Get mutants for this source file
-      file_mutants <- survived_mutants[vapply(
+      file_ids <- names(survived_mutants)[vapply(
         survived_mutants,
         function(m) identical(m$src, src_file),
         logical(1)
       )]
-      if (length(file_mutants) > 0) {
-        file_mutants <- identify_equivalent_mutants(src_file, file_mutants, api_config = api_config)
-        # Update the main package_mutants list with equivalence information
-        for (id in names(file_mutants)) {
-          package_mutants[[id]]$equivalent <- file_mutants[[id]]$equivalent
-          if (!is.null(file_mutants[[id]]$equivalence_status)) {
-            package_mutants[[id]]$equivalence_status <- file_mutants[[id]]$equivalence_status
-          }
+      for (g in unname(split(file_ids, ceiling(seq_along(file_ids) / eq_batch_size)))) {
+        chunks[[length(chunks) + 1L]] <- list(src = src_file, ids = g)
+      }
+    }
+
+    analyze_chunk <- function(chunk) {
+      identify_equivalent_mutants(
+        chunk$src, survived_mutants[chunk$ids],
+        api_config = api_config, workers = 1, batch_size = eq_batch_size
+      )
+    }
+
+    eq_workers <- max(1, min(workers_to_use, length(chunks)))
+    per_chunk <- if (eq_workers > 1 && future::supportsMulticore()) {
+      parallel::mclapply(chunks, analyze_chunk, mc.cores = eq_workers)
+    } else {
+      lapply(chunks, analyze_chunk)
+    }
+
+    # Merge equivalence information back into the main package_mutants list.
+    for (chunk_mutants in per_chunk) {
+      if (is.null(chunk_mutants) || inherits(chunk_mutants, "try-error")) {
+        next
+      }
+      for (id in names(chunk_mutants)) {
+        package_mutants[[id]]$equivalent <- chunk_mutants[[id]]$equivalent
+        if (!is.null(chunk_mutants[[id]]$equivalence_status)) {
+          package_mutants[[id]]$equivalence_status <- chunk_mutants[[id]]$equivalence_status
+        }
+        if (!is.null(chunk_mutants[[id]]$equivalence_reason)) {
+          package_mutants[[id]]$equivalence_reason <- chunk_mutants[[id]]$equivalence_reason
         }
       }
     }
