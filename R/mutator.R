@@ -751,7 +751,44 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
   parallel_results <- list()
   workers_to_use <- max(1, min(cores, max(1, length(mutants))))
 
-  derived_timeout_seconds <- baseline_elapsed_seconds * timeout_multiplier
+  # --- Calibrate the timeout against *contended* conditions ----------------
+  # The baseline above ran alone, but mutants run `workers_to_use`-wide. For
+  # packages with heavy per-run startup cost -- loading many dependencies, or
+  # recompiling C on every R CMD INSTALL -- running that many test suites at
+  # once inflates each one's wall-clock well beyond the solo baseline, because
+  # they contend for CPU, disk and memory. A timeout derived from the *solo*
+  # baseline then fires on essentially every mutant (we have observed 100% false
+  # HANG). So we measure how long a baseline run takes when `workers_to_use` of
+  # them run concurrently, and derive the timeout from that contended figure.
+  # Skipped when the timeout is given explicitly, when there is no parallelism,
+  # or (forking unavailable) when we cannot reproduce the contention cheaply.
+  contended_baseline_seconds <- baseline_elapsed_seconds
+  if (is.null(timeout_seconds) && workers_to_use > 1 && length(mutants) > 0 &&
+    future::supportsMulticore()) {
+    time_one_baseline <- function(i) {
+      timing <- system.time(passed <- run_tests(pkg_dir))
+      list(elapsed = unname(timing[["elapsed"]]), passed = isTRUE(passed))
+    }
+    calibration <- tryCatch(
+      parallel::mclapply(seq_len(workers_to_use), time_one_baseline,
+        mc.cores = workers_to_use, mc.preschedule = FALSE
+      ),
+      error = function(e) NULL
+    )
+    elapsed <- vapply(
+      calibration,
+      function(r) if (is.list(r) && is.numeric(r$elapsed)) r$elapsed else NA_real_,
+      numeric(1)
+    )
+    elapsed <- elapsed[is.finite(elapsed)]
+    if (length(elapsed) > 0) {
+      # Use the slowest of the concurrent runs: it reflects the worst contention
+      # a mutant is likely to hit. Never go below the solo baseline.
+      contended_baseline_seconds <- max(elapsed, baseline_elapsed_seconds)
+    }
+  }
+
+  derived_timeout_seconds <- contended_baseline_seconds * timeout_multiplier
   effective_timeout_seconds <- if (!is.null(timeout_seconds)) {
     timeout_seconds
   } else {
@@ -764,14 +801,16 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
 
   if (isFullLog) {
     message(sprintf(
-      "Baseline runtime: %.2fs | Mutant timeout: %.2fs (%s)",
+      "Baseline runtime: %.2fs (solo) / %.2fs (contended x%d) | Mutant timeout: %.2fs (%s)",
       baseline_elapsed_seconds,
+      contended_baseline_seconds,
+      workers_to_use,
       effective_timeout_seconds,
       if (is.null(timeout_seconds)) {
         if (effective_timeout_seconds > derived_timeout_seconds) {
-          sprintf("baseline x %.2f, floor %.2fs", timeout_multiplier, timeout_floor_seconds)
+          sprintf("contended baseline x %.2f, floor %.2fs", timeout_multiplier, timeout_floor_seconds)
         } else {
-          sprintf("baseline x %.2f", timeout_multiplier)
+          sprintf("contended baseline x %.2f", timeout_multiplier)
         }
       } else {
         "explicit"
