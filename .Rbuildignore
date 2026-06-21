@@ -11,3 +11,8 @@ packages
 ^.*\.Rcheck$
 ^.*\.tar\.gz$
 ^\.openai_config$
+^.*\.Rproj$
+^\.Rproj\.user$
+^_pkgdown\.yml$
+^docs$
+^pkgdown$

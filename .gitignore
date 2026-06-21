@@ -17,3 +17,4 @@ cpp_tests/*.txt
 packages/
 mutator.Rcheck
 *tar.gz
+docs
