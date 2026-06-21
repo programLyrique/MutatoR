@@ -21,10 +21,7 @@ public:
     // Return the symbol of the operator (e.g., "+" or "-")
     SEXP getSymbol() const { return operator_symbol; }
 
-    // Method to flip the operator; pure virtual to enforce implementation in derived classes
-    virtual void flip(SEXP& node) const = 0;
-
-    // Optionally, return the name/type of the operator
+    // Return the name/type of the operator
     virtual std::string getType() const = 0;
 
 protected:

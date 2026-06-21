@@ -1,6 +1,7 @@
 // Mutator.cpp
 #include "Mutator.h"
 #include "DeleteOperator.h"
+#include "ReplacementOperator.h"
 
 static SEXP asStringOrNA(SEXP x)
 {
@@ -137,7 +138,13 @@ std::pair<SEXP, bool> Mutator::applyFlipMutation(SEXP expr, const std::vector<Op
     }
 
     // perform the operator‑specific flip
-    pos.op->flip(node);
+    const auto *repl = dynamic_cast<const ReplacementOperator *>(pos.op.get());
+    if (repl == nullptr)
+    {
+        UNPROTECT(1);
+        return {R_NilValue, false};
+    }
+    repl->flip(node);
 
     SEXP info = PROTECT(buildMutationInfo(pos, CAR(node))); // [1]
     Rf_setAttrib(mutated, Rf_install("mutation_info"), info);

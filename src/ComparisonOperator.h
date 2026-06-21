@@ -1,11 +1,11 @@
 #ifndef COMPARISON_OPERATOR_H
 #define COMPARISON_OPERATOR_H
 
-#include "Operator.h"
+#include "ReplacementOperator.h"
 
-class ComparisonOperator : public Operator {
+class ComparisonOperator : public ReplacementOperator {
 public:
-    ComparisonOperator(SEXP symbol) : Operator(symbol){}
+    ComparisonOperator(SEXP symbol) : ReplacementOperator(symbol){}
     virtual ~ComparisonOperator() = default;
 
     virtual std::string getType() const override{

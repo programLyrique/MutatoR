@@ -12,14 +12,9 @@ public:
         return "DeleteOperator";
     }
 
-    /* 
-        TODO: should not be implemented, against Interface Segregation Principle
-        A client should never be forced to implement an interface that it doesn’t 
-        use, or clients shouldn’t be forced to depend on methods they do not use.
-    */
-    void flip(SEXP& node) const override {
-        return;
-    }
+    // Note: deletion is handled structurally by Mutator::applyDeleteMutation and
+    // is not a symbol replacement, so DeleteOperator deliberately does not
+    // implement flip() (it does not inherit from ReplacementOperator).
 };
 
 #endif

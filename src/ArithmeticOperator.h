@@ -2,11 +2,11 @@
 #define ARITHMETIC_OPERATOR_H
 
 #include <vector>
-#include "Operator.h"
+#include "ReplacementOperator.h"
 
-class ArithmeticOperator : public Operator {
+class ArithmeticOperator : public ReplacementOperator {
 public:
-    ArithmeticOperator(SEXP symbol) : Operator(symbol) {}
+    ArithmeticOperator(SEXP symbol) : ReplacementOperator(symbol) {}
     virtual ~ArithmeticOperator() = default;
 
     virtual std::string getType() const override {

@@ -1,11 +1,11 @@
 #ifndef LOGICAL_OPERATOR_H
 #define LOGICAL_OPERATOR_H
 
-#include "Operator.h"
+#include "ReplacementOperator.h"
 
-class LogicalOperator : public Operator {
-public: 
-    LogicalOperator(SEXP symbol) : Operator(symbol){}
+class LogicalOperator : public ReplacementOperator {
+public:
+    LogicalOperator(SEXP symbol) : ReplacementOperator(symbol){}
     virtual ~LogicalOperator() = default;
 
     virtual std::string getType() const override{
