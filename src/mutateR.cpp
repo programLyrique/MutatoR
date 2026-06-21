@@ -41,27 +41,31 @@ static SEXP mutate_single(SEXP expr_sexp, SEXP src_ref_sexp, bool is_inside_bloc
 
     Mutator mutator;
 
-    // protect every mutant until we have copied it into the result list
-    std::vector<SEXP> mutants;  mutants.reserve(n);
+    // applyMutation() returns each successful mutant already PROTECTed, so it
+    // survives the allocations of later iterations. We keep those protections on
+    // the stack and release them all at the end, once every mutant is reachable
+    // from the result list. n_protected tracks exactly what is on the stack
+    // (one per mutant, plus the result vector) so the final UNPROTECT is
+    // self-evidently balanced.
+    std::vector<SEXP> mutants;
+    mutants.reserve(n);
     int n_protected = 0;
 
     for (int i = 0; i < n; ++i) {
         auto result = mutator.applyMutation(expr_sexp, operators, i);
-        auto mut = result.first;
-        auto ok = result.second;
-        if (ok) {
-            // PROTECT(mut); ++n_protected;
-            mutants.push_back(mut);
+        if (result.second) {
+            mutants.push_back(result.first); // already PROTECTed by applyMutation
+            ++n_protected;
         }
     }
 
     const R_xlen_t m = static_cast<R_xlen_t>(mutants.size());
-    SEXP res = PROTECT(Rf_allocVector(VECSXP, m)); ++n_protected;
+    SEXP res = PROTECT(Rf_allocVector(VECSXP, m));
+    ++n_protected;
     for (R_xlen_t i = 0; i < m; ++i)
         SET_VECTOR_ELT(res, i, mutants[i]);
 
-    // UNPROTECT(n_protected);   // res is now reachable from R, others are inside res
-    UNPROTECT(1 + m);         // res + every mutant
+    UNPROTECT(n_protected); // every mutant + res
     return res;
 }
 
