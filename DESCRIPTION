@@ -23,7 +23,8 @@ Imports:
     furrr,
     callr
 Suggests:
-    xml2
+    xml2,
+    pkgbuild
 LinkingTo:
     testthat
 Config/testthat/edition: 3
