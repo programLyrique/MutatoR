@@ -1002,3 +1002,54 @@ test_that("detectEqMutants runs the real equivalence workflow for underscore fil
     expect_true(isTRUE(mutant$equivalent))
     expect_equal(mutant$equivalence_status, "EQUIVALENT")
 })
+
+test_that("extract_harness_test_args mirrors the testthat.R harness", {
+  mk <- function(lines) {
+    f <- tempfile(fileext = ".R")
+    writeLines(lines, f)
+    f
+  }
+
+  # Canonical harness with a filter: the filter is forwarded, package dropped.
+  expect_equal(
+    extract_harness_test_args(mk(c(
+      "library(testthat)", "library(jsonlite)",
+      "test_check(\"jsonlite\", filter = \"toJSON|fromJSON\")"
+    ))),
+    list(filter = "toJSON|fromJSON")
+  )
+
+  # Plain harness: nothing to forward (full suite runs).
+  expect_equal(
+    extract_harness_test_args(mk(c("library(testthat)", "test_check(\"pkg\")"))),
+    list()
+  )
+
+  # `package` named, and a `reporter` argument is stripped.
+  expect_equal(
+    extract_harness_test_args(mk(
+      "test_check(package = \"pkg\", reporter = \"summary\", filter = \"x\")"
+    )),
+    list(filter = "x")
+  )
+
+  # Namespaced call is recognised too.
+  expect_equal(
+    extract_harness_test_args(mk("testthat::test_check(\"pkg\", filter = \"y\")")),
+    list(filter = "y")
+  )
+
+  # A non-literal argument cannot be evaluated from literals -> safe fallback
+  # (empty list = run the full suite rather than guess).
+  expect_equal(
+    extract_harness_test_args(mk(c("flt <- \"a|b\"", "test_check(\"pkg\", filter = flt)"))),
+    list()
+  )
+
+  # No harness file, or no test_check() call -> empty list.
+  expect_equal(extract_harness_test_args(tempfile(fileext = ".R")), list())
+  expect_equal(
+    extract_harness_test_args(mk(c("library(tinytest)", "test_package(\"pkg\")"))),
+    list()
+  )
+})

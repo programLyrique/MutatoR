@@ -226,6 +226,70 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL,
   results
 }
 
+# Extract the arguments a package's tests/testthat.R harness passes to
+# testthat::test_check(), so the testthat strategy can run exactly the tests the
+# harness (and R CMD check) would. testthat::test_check(package, reporter, ...)
+# is just test_dir("testthat", package = ..., reporter = ..., ..., load_package
+# = "installed"); the only author-controlled behaviour we need to mirror lives
+# in `...` (most commonly `filter`). Returns a named list of arguments to
+# forward to testthat::test_dir(), with `package` and `reporter` removed (the
+# mutator supplies its own reporter and loads the dev package via load_all()).
+# Returns list() when there is no harness, no test_check() call, or the call
+# cannot be parsed/evaluated from literals -- in which case the full suite runs.
+extract_harness_test_args <- function(harness_file) {
+  if (!file.exists(harness_file)) {
+    return(list())
+  }
+  exprs <- tryCatch(parse(harness_file), error = function(e) NULL)
+  if (is.null(exprs)) {
+    return(list())
+  }
+
+  is_test_check_call <- function(fn) {
+    (is.symbol(fn) && identical(as.character(fn), "test_check")) ||
+      (is.call(fn) && identical(fn[[1L]], as.name("::")) &&
+        identical(as.character(fn[[3L]]), "test_check"))
+  }
+
+  for (e in exprs) {
+    if (!is.call(e) || !is_test_check_call(e[[1L]])) {
+      next
+    }
+
+    # Turn the test_check(...) call into a list(...) call so its arguments can be
+    # captured, after stripping the ones the mutator controls. `package` is
+    # either named or the first positional argument; `reporter` is always named.
+    call_list <- e
+    call_list[[1L]] <- quote(list)
+    arg_names <- names(call_list)
+    if (is.null(arg_names)) {
+      arg_names <- rep("", length(call_list))
+    }
+    if ("reporter" %in% arg_names) {
+      call_list[["reporter"]] <- NULL
+      arg_names <- names(call_list)
+    }
+    if ("package" %in% arg_names) {
+      call_list[["package"]] <- NULL
+    } else {
+      # First positional argument (index >= 2; index 1 is the `list` symbol).
+      positional <- which(arg_names == "")
+      positional <- positional[positional >= 2L]
+      if (length(positional) > 0) {
+        call_list[[positional[1L]]] <- NULL
+      }
+    }
+
+    args <- tryCatch(eval(call_list, envir = baseenv()), error = function(e) NULL)
+    if (is.null(args) || !is.list(args)) {
+      return(list())
+    }
+    return(args)
+  }
+
+  list()
+}
+
 #' Run Mutation Testing for an R Package
 #'
 #' Mutates all `.R` files under a package's `R/` directory, runs the package's
@@ -233,8 +297,11 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL,
 #'
 #' Test strategy is, by default, detected automatically:
 #' \itemize{
-#'   \item If `tests/testthat/` exists, `testthat::test_dir()` is used (the
-#'   mutant is loaded in-process with `pkgload::load_all()`, no installation).
+#'   \item If `tests/testthat/` exists, the mutant is loaded in-process with
+#'   `pkgload::load_all()` (no installation) and its tests are run the way the
+#'   package's own `tests/testthat.R` harness runs them -- i.e. with the same
+#'   arguments (notably any `filter`) that the harness passes to
+#'   `testthat::test_check()` -- via `testthat::test_dir()`.
 #'   \item Otherwise, if `tests/` exists, mutator installs the mutant package
 #'   with `--install-tests` and runs `tools::testInstalledPackage()`.
 #' }
@@ -416,7 +483,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
 
     proc <- tryCatch(
       callr::r_bg(
-        function(pkg_path, not_cran, fail_fast) {
+        function(pkg_path, not_cran, fail_fast, harness_args) {
           # Control NOT_CRAN so skip_on_cran()/skip_if_offline() behave as on
           # CRAN ("false") or run everything in dev mode ("true").
           Sys.setenv(NOT_CRAN = not_cran)
@@ -431,13 +498,23 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
           }
           setwd(pkg_path)
           suppressMessages(pkgload::load_all(".", quiet = TRUE))
-          tr <- testthat::test_dir("tests/testthat", reporter = "progress")
+          # Run the tests the way the package's own tests/testthat.R harness does:
+          # testthat::test_check() is test_dir() with the harness's extra arguments
+          # (notably `filter`) forwarded. `harness_args` holds those arguments (see
+          # extract_harness_test_args()), so we run exactly the tests the package
+          # author / R CMD check would, but against the load_all()'d dev package
+          # (load_package = "none") rather than an installed one.
+          tr <- do.call(
+            testthat::test_dir,
+            c(list("tests/testthat", reporter = "progress"), harness_args)
+          )
           sum(tr$failed)
         },
         args = list(
           pkg_path = pkg_path,
           not_cran = if (cran) "false" else "true",
-          fail_fast = fail_fast
+          fail_fast = fail_fast,
+          harness_args = harness_test_args
         ),
         stdout = out_file,
         stderr = "2>&1"
@@ -644,6 +721,14 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     passed
   }
 
+  # The testthat strategy runs each mutant through the package's own
+  # tests/testthat.R harness (i.e. testthat::test_check()) rather than calling
+  # test_dir() blindly, so it tests exactly what the author / R CMD check do --
+  # including any `filter` the harness passes. These harness arguments are the
+  # same for every mutant, so extract them once here and forward them to the
+  # test_dir() call inside run_testthat_tests().
+  harness_test_args <- list()
+
   test_strategy <- switch(
     strategy,
     auto = detect_test_strategy(pkg_dir),
@@ -660,6 +745,12 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
       "installed-tests"
     }
   )
+
+  if (identical(test_strategy, "testthat")) {
+    harness_test_args <- extract_harness_test_args(
+      file.path(pkg_dir, "tests", "testthat.R")
+    )
+  }
 
   run_tests <- function(pkg_path) {
     if (identical(test_strategy, "testthat")) {
@@ -937,7 +1028,8 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
             run_tests = run_tests,
             effective_timeout_seconds = effective_timeout_seconds,
             cran = cran,
-            fail_fast = fail_fast
+            fail_fast = fail_fast,
+            harness_test_args = harness_test_args
           )
         )
       )

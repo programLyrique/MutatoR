@@ -282,6 +282,53 @@ test_that("cran mode controls skip_on_cran via NOT_CRAN", {
   expect_false(any(vapply(res_dev$test_results, function(x) identical(x, "SURVIVED"), logical(1))))
 })
 
+test_that("testthat strategy honors the tests/testthat.R harness filter", {
+  skip_if_not_installed("pkgload")
+  skip_if_not_installed("callr")
+  skip_if_not_installed("furrr")
+  skip_if_not_installed("future")
+
+  temp_dir <- tempfile()
+  dir.create(temp_dir)
+  on.exit(unlink(temp_dir, recursive = TRUE), add = TRUE)
+
+  pkg_dir <- file.path(temp_dir, "hfpkg")
+  dir.create(file.path(pkg_dir, "R"), recursive = TRUE)
+  dir.create(file.path(pkg_dir, "tests", "testthat"), recursive = TRUE)
+
+  writeLines(c(
+    "Package: hfpkg", "Version: 0.1.0", "Title: t",
+    "Description: t.", "Author: a", "License: MIT"
+  ), file.path(pkg_dir, "DESCRIPTION"))
+  writeLines("exportPattern(\"^[[:alpha:]]+\")", file.path(pkg_dir, "NAMESPACE"))
+  writeLines("f <- function(x) x + 1", file.path(pkg_dir, "R", "f.R"))
+  writeLines("g <- function(x) x * 2", file.path(pkg_dir, "R", "g.R"))
+
+  # Harness restricts the run to test files matching "keep". The kept file tests
+  # g(); the dropped file is the *only* thing that tests f().
+  writeLines(
+    "library(testthat)\nlibrary(hfpkg)\ntest_check(\"hfpkg\", filter = \"keep\")",
+    file.path(pkg_dir, "tests", "testthat.R")
+  )
+  writeLines("test_that(\"keep g\", { expect_equal(g(2), 4) })",
+             file.path(pkg_dir, "tests", "testthat", "test-keep.R"))
+  writeLines("test_that(\"drop f\", { expect_equal(f(1), 2) })",
+             file.path(pkg_dir, "tests", "testthat", "test-drop.R"))
+
+  res <- suppressMessages(
+    mutate_package(pkg_dir, cores = 1, max_line_deletions = 0)
+  )
+  v <- unlist(res$test_results)
+  f_mutants <- grepl("^f\\.R", names(v))
+  g_mutants <- grepl("^g\\.R", names(v))
+
+  # f's only detecting test lives in the filtered-out file, so every f mutant
+  # survives; g is exercised by the kept file, so g mutants are killed. This is
+  # only true if the harness `filter` is actually honored.
+  expect_true(any(f_mutants) && all(v[f_mutants] == "SURVIVED"))
+  expect_true(any(v[g_mutants] == "KILLED"))
+})
+
 test_that("fail_fast stops the suite at the first failing test but keeps the verdict", {
   skip_if_not_installed("pkgload")
   skip_if_not_installed("callr")

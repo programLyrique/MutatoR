@@ -92,8 +92,11 @@ tests against each mutant in parallel, and summarizes mutation outcomes.
 \details{
 Test strategy is, by default, detected automatically:
 \itemize{
-\item If \verb{tests/testthat/} exists, \code{testthat::test_dir()} is used (the
-mutant is loaded in-process with \code{pkgload::load_all()}, no installation).
+\item If \verb{tests/testthat/} exists, the mutant is loaded in-process with
+\code{pkgload::load_all()} (no installation) and its tests are run the way the
+package's own \code{tests/testthat.R} harness runs them -- i.e. with the same
+arguments (notably any \code{filter}) that the harness passes to
+\code{testthat::test_check()} -- via \code{testthat::test_dir()}.
 \item Otherwise, if \verb{tests/} exists, mutator installs the mutant package
 with \code{--install-tests} and runs \code{tools::testInstalledPackage()}.
 }
