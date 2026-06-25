@@ -452,13 +452,15 @@ get_package_name <- function(pkg_path) {
 # free-standing and argument-driven so they can be tested in isolation. Used only
 # under the testthat strategy; see mutate_package(coverage_guided=).
 
-# Disable covr's comment-based exclusions (`# nocov`, `# nocov start/end`). They
-# tell covr to emit *no coverage* for the marked code, but that code still runs
-# and its mutants can still be killed -- so an excluded file would look UNCOVERED
-# and be wrongly auto-SURVIVED. Vendored compat files (e.g. r-lib's
-# compat-types-check.R) wrap the whole file in `# nocov`, which is exactly this
+# Disable covr's comment-based exclusions (its "nocov" line and start/end range
+# markers). They tell covr to emit *no coverage* for the marked code, but that
+# code still runs and its mutants can still be killed -- so an excluded file would
+# look UNCOVERED and be wrongly auto-SURVIVED. Vendored compat files (e.g. r-lib's
+# compat-types-check.R) wrap the whole file in such markers, which is exactly this
 # trap. Point the exclusion markers at sentinels that never appear in source so
 # covr instruments everything; genuinely unexecuted lines still stay uncovered.
+# (This comment deliberately avoids the literal covr marker tokens so that running
+# covr on mutator itself does not treat this line as an unbalanced range start.)
 covr_no_exclusions <- list(
   covr.exclude_start = "<<mutator-no-exclude-start>>",
   covr.exclude_end = "<<mutator-no-exclude-end>>",
@@ -531,7 +533,7 @@ build_coverage_map_record_tests <- function(pkg_dir) {
 # counting). Failures are summed so the run also serves as the baseline check.
 perfile_collect_code <- function(testdir, out, not_cran, pkgname) {
   c(
-    sprintf("Sys.setenv(NOT_CRAN = %s)", shQuote(not_cran)),
+    sprintf("Sys.setenv(NOT_CRAN = %s)", deparse(not_cran)),
     "local({",
     "  ns <- asNamespace('covr'); CT <- get('.counters', ns)",
     "  reset <- function() for (k in ls(CT)) { e <- CT[[k]]; if (is.list(e)) { e$value <- 0L; CT[[k]] <- e } }",
@@ -552,8 +554,8 @@ perfile_collect_code <- function(testdir, out, not_cran, pkgname) {
     "    start_file = function(filename, ...) { self$cov_cur <- as.character(filename); reset() },",
     "    end_file = function(...) { self$cov_captured[[self$cov_cur]] <- snap() }))",
     "  rep <- Rep$new(); nfail <- NA_integer_",
-    sprintf("  err <- tryCatch({ res <- testthat::test_dir(%s, package = %s, reporter = rep, stop_on_failure = FALSE, load_package = 'installed'); df <- as.data.frame(res); nfail <- sum(df$failed) + sum(df$error, na.rm = TRUE); NA_character_ }, error = function(e) conditionMessage(e))", shQuote(testdir), shQuote(pkgname)),
-    sprintf("  saveRDS(list(captured = rep$cov_captured, nfail = nfail, err = err), %s)", shQuote(out)),
+    sprintf("  err <- tryCatch({ res <- testthat::test_dir(%s, package = %s, reporter = rep, stop_on_failure = FALSE, load_package = 'installed'); df <- as.data.frame(res); nfail <- sum(df$failed) + sum(df$error, na.rm = TRUE); NA_character_ }, error = function(e) conditionMessage(e))", deparse(testdir), deparse(pkgname)),
+    sprintf("  saveRDS(list(captured = rep$cov_captured, nfail = nfail, err = err), %s)", deparse(out)),
     "})"
   )
 }
