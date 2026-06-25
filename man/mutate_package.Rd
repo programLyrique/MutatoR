@@ -101,7 +101,8 @@ whole suite. Coverage is measured once on the unmutated package with
 also doubles as the baseline check (the suite is not run twice). A mutant on
 a line no test covers cannot be killed, so it is reported \code{SURVIVED} without
 running any test. Selection is at the test-\emph{file} level (testthat filters by
-file), so it never changes a mutant's verdict, only which tests run. Requires
+file); under the assumption that the suite deterministically exercises the code, it
+should not change a mutant's verdict, only which tests run. Requires
 the \code{testthat} strategy (errors otherwise). Defaults to \code{FALSE}.}
 
 \item{coverage_backend}{How \code{coverage_guided} attributes coverage to tests

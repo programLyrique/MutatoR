@@ -215,11 +215,11 @@ mutate_package("path/to/pkg", coverage_guided = TRUE)
 The single coverage run also serves as the baseline check (it runs the package's
 own `tests/testthat.R` harness, which fails if any test fails), so the suite is
 not run twice. Selection is at the **test-file** level — testthat filters tests by
-file — so it changes *which* tests run, never a mutant's verdict.
+file — and assumes the suite deterministically exercises the code, so it changes
+*which* tests run without changing a mutant's verdict.
 
-Requires the `covr` package. Selection is sound — it never changes a mutant's
-verdict, only which tests run — but how faithfully it attributes coverage to tests
-depends on the backend (`coverage_backend`):
+Requires the `covr` package. Coverage attribution (and therefore speed-up) depends
+on the backend (`coverage_backend`):
 
 - **`"record_tests"`** (default) uses covr's `record_tests` in a single run and
   relies only on covr's public output. Its limitation: covr credits a covered line

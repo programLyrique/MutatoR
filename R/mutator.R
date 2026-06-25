@@ -645,7 +645,8 @@ list_test_tokens <- function(pkg_dir) {
 #'   also doubles as the baseline check (the suite is not run twice). A mutant on
 #'   a line no test covers cannot be killed, so it is reported `SURVIVED` without
 #'   running any test. Selection is at the test-*file* level (testthat filters by
-#'   file), so it never changes a mutant's verdict, only which tests run. Requires
+#'   file); under the assumption that the suite deterministically exercises the code,
+#'   it should not change a mutant's verdict, only which tests run. Requires
 #'   the `testthat` strategy (errors otherwise). Defaults to `FALSE`.
 #' @param coverage_backend How `coverage_guided` attributes coverage to tests
 #'   (ignored when `coverage_guided = FALSE`). `"record_tests"` (the default) uses
