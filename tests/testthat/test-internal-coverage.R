@@ -1133,3 +1133,98 @@ test_that("filter_excluded_files drops files matching glob patterns", {
     # Non-character errors.
     expect_error(filter_excluded_files(files, 123), "character vector")
 })
+
+# --- imputesrcref-based location refinement (optional dependency) ------------
+
+test_that("imputed_function_slot identifies function-definition assignments", {
+    imputed_function_slot <- resolve_mutator_fn("imputed_function_slot")
+
+    expect_equal(imputed_function_slot(quote(f <- function(x) x)), 3L)
+    expect_equal(imputed_function_slot(str2lang("f = function() 1")), 3L)
+    expect_equal(imputed_function_slot(quote(f <<- function(x) x + 1)), 3L)
+    expect_null(imputed_function_slot(quote(x <- 1)))
+    expect_null(imputed_function_slot(quote(f(1))))
+    expect_null(imputed_function_slot(quote(x)))
+})
+
+test_that("is_transparent_brace recognises injected transparent braces", {
+    is_transparent_brace <- resolve_mutator_fn("is_transparent_brace")
+
+    sr <- structure(c(1L, 1L, 1L, 5L, 1L, 5L, 1L, 1L), class = "srcref")
+    sr2 <- structure(c(2L, 1L, 2L, 5L, 1L, 5L, 2L, 2L), class = "srcref")
+
+    transparent <- quote({
+        x + 1
+    })
+    attr(transparent, "srcref") <- list(sr, sr)
+    expect_true(is_transparent_brace(transparent))
+
+    # Differing entries -> not a transparent (source-invisible) wrapper.
+    nontransparent <- transparent
+    attr(nontransparent, "srcref") <- list(sr, sr2)
+    expect_false(is_transparent_brace(nontransparent))
+
+    # A brace with no srcref, and non-brace calls, are not transparent braces.
+    bare <- quote({
+        x + 1
+    })
+    attr(bare, "srcref") <- NULL
+    expect_false(is_transparent_brace(bare))
+    expect_false(is_transparent_brace(quote(x + 1)))
+    expect_false(is_transparent_brace(quote(x)))
+})
+
+test_that("mutation_diff_path locates the changed AST node", {
+    mutation_diff_path <- resolve_mutator_fn("mutation_diff_path")
+
+    # Identical expressions -> NULL.
+    expect_null(mutation_diff_path(quote(a + b), quote(a + b)))
+    # Operator symbol changed -> path to the callee slot.
+    expect_equal(mutation_diff_path(quote(a + b), quote(a - b)), 1L)
+    # Operand changed -> path to that argument slot.
+    expect_equal(mutation_diff_path(quote(a + b), quote(c + b)), 2L)
+    # Nested change -> multi-step path.
+    expect_equal(mutation_diff_path(quote(f(a + b)), quote(f(a - b))), c(2L, 1L))
+    # Structural difference (different lengths) -> differs at this node.
+    expect_equal(mutation_diff_path(quote(f(a, b)), quote(f(a))), integer(0))
+})
+
+test_that("location refinement sharpens operator mutants when imputesrcref is present", {
+    skip_if_not_installed("imputesrcref")
+    mutate_file <- resolve_mutator_fn("mutate_file")
+
+    src <- tempfile(fileext = ".R")
+    out_dir <- tempfile("mutations_")
+    on.exit(unlink(c(src, out_dir), recursive = TRUE), add = TRUE)
+
+    # The `+` lives in a call-argument position (which imputesrcref wraps) on a
+    # line distinct from the function definition, so coarse bounds would span
+    # the whole function.
+    writeLines(c(
+        "add <- function(a, b) {",
+        "  z <- 0",
+        "  h(a + b)",
+        "}"
+    ), src)
+
+    mutants <- mutate_file(src, out_dir = out_dir, max_line_deletions = 0)
+
+    plus <- Filter(function(m) grepl("'\\+'", m$info), mutants)
+    expect_gt(length(plus), 0)
+
+    # The reported range is pinned to the single line carrying `a + b` (line 3),
+    # not the whole 1-4 function span.
+    for (m in plus) {
+        expect_match(m$info, "Range: 3:[0-9]+-3:[0-9]+")
+        expect_equal(m$loc$start_line, 3L)
+        expect_equal(m$loc$end_line, 3L)
+    }
+
+    # Mutant files must never contain injected transparent braces: the imputed
+    # AST is only a location oracle, never deparsed into output.
+    for (m in mutants) {
+        txt <- paste(readLines(m$path, warn = FALSE), collapse = "\n")
+        expect_match(txt, "h\\(a [+-] b\\)|h\\(a\\)|z <- 0", all = FALSE)
+        expect_false(grepl("\\{\\s*\\n\\s*a [+-] b\\s*\\n\\s*\\}", txt))
+    }
+})

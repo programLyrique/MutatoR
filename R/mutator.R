@@ -242,6 +242,169 @@ mutation_location <- function(src_file, raw_info = NULL) {
   list(file_path = file_path, start_line = start_line, end_line = end_line)
 }
 
+# --- Optional source-reference refinement via the 'imputesrcref' package ------
+#
+# The mutation engine reports an operator mutant's location as the bounds of its
+# enclosing *top-level* expression, because R attaches no `srcref` to nested call
+# objects (e.g. the `+` in `x + y`). That makes the reported location as wide as
+# the whole function. The 'imputesrcref' package (GitHub: PRL-PRG/imputesrcref)
+# injects transparent `{ }` wrappers carrying parse-data-derived srcrefs around
+# sub-expressions, which lets us recover a precise span for many operator
+# mutants. It is an optional, GitHub-only dependency (not declarable in
+# DESCRIPTION for CRAN): used only when installed, as a read-only location
+# oracle. The imputed AST is never fed to the engine, so deparsed mutant output
+# is byte-for-byte identical whether or not the package is present.
+
+# The package name is held in a variable rather than written as a literal so
+# `R CMD check`'s dependency scan does not treat this optional, GitHub-only
+# package as an undeclared hard dependency (it cannot be a declared one for
+# CRAN). All access -- availability test and function lookup -- goes through it.
+.imputesrcref_pkg <- "imputesrcref"
+
+imputesrcref_available <- function() {
+  requireNamespace(.imputesrcref_pkg, quietly = TRUE)
+}
+
+# Index of the slot holding a `function(...) ...` definition in a top-level
+# expression, for `name <- function(...)` / `= ` / `<<-` assignments. NULL when
+# the expression is not a plain function-definition assignment.
+imputed_function_slot <- function(expr) {
+  if (!is.call(expr) || length(expr) < 3) {
+    return(NULL)
+  }
+  op <- if (is.symbol(expr[[1]])) as.character(expr[[1]]) else ""
+  if (!op %in% c("<-", "=", "<<-")) {
+    return(NULL)
+  }
+  rhs <- expr[[3]]
+  if (is.call(rhs) && is.symbol(rhs[[1]]) && identical(as.character(rhs[[1]]), "function")) {
+    return(3L)
+  }
+  NULL
+}
+
+# Build a list parallel to `parsed` in which each top-level function definition
+# has imputed transparent-brace srcrefs in its body/formals. Non-functions and
+# any definition that fails to impute are returned unchanged. Used only to look
+# up precise source spans, never deparsed into mutant files.
+build_imputed_exprs <- function(parsed) {
+  lapply(parsed, function(expr) {
+    slot <- imputed_function_slot(expr)
+    if (is.null(slot)) {
+      return(expr)
+    }
+    fn <- tryCatch(eval(expr[[slot]]), error = function(e) NULL)
+    if (!is.function(fn)) {
+      return(expr)
+    }
+    impute_srcrefs <- getExportedValue(.imputesrcref_pkg, "impute_srcrefs")
+    g <- tryCatch(impute_srcrefs(fn), error = function(e) NULL)
+    if (is.null(g)) {
+      return(expr)
+    }
+    out <- expr
+    fdef <- out[[slot]]
+    fdef[[3L]] <- body(g)
+    fmls <- formals(g)
+    if (!is.null(fmls)) {
+      fdef[[2L]] <- fmls
+    }
+    out[[slot]] <- fdef
+    out
+  })
+}
+
+# An injected, transparent brace stores its srcref as a 2-element list whose
+# entries are identical (both spanning the wrapped expression).
+is_transparent_brace <- function(node) {
+  if (!is.call(node) || !is.symbol(node[[1]]) || !identical(as.character(node[[1]]), "{")) {
+    return(FALSE)
+  }
+  sr <- attr(node, "srcref", exact = TRUE)
+  is.list(sr) && length(sr) >= 2 && identical(sr[[1]], sr[[2]])
+}
+
+# Path (sequence of `[[i]]` indices) at which `m` first differs from `o`, or
+# NULL when identical. `integer(0)` means they differ at this node itself.
+mutation_diff_path <- function(o, m) {
+  if (is.call(o) && is.call(m) && length(o) == length(m)) {
+    for (i in seq_along(o)) {
+      p <- mutation_diff_path(o[[i]], m[[i]])
+      if (!is.null(p)) {
+        return(c(i, p))
+      }
+    }
+    return(NULL)
+  }
+  if (!identical(o, m)) {
+    return(integer(0))
+  }
+  NULL
+}
+
+# Walk `imp_node` in lock-step with `orig_node` down `path` (expressed in the
+# original tree's coordinates), skipping the extra transparent braces present
+# only in the imputed tree, and return the srcref of the nearest brace enclosing
+# the target node (NULL when no brace encloses it, e.g. statement-level
+# operators or deletions).
+nearest_brace_srcref <- function(orig_node, imp_node, path) {
+  best <- NULL
+  cur_o <- orig_node
+  cur_i <- imp_node
+  descend_braces <- function() {
+    while (is_transparent_brace(cur_i)) {
+      best <<- attr(cur_i, "srcref", exact = TRUE)[[1]]
+      cur_i <<- cur_i[[2L]]
+    }
+  }
+  for (idx in path) {
+    descend_braces()
+    if (!is.call(cur_o) || length(cur_o) < idx) {
+      return(best)
+    }
+    cur_o <- cur_o[[idx]]
+    cur_i <- if (is.call(cur_i) && length(cur_i) >= idx) cur_i[[idx]] else cur_i
+  }
+  descend_braces()
+  best
+}
+
+# Given an AST mutant `m` (a full-file expression list with exactly one top-level
+# expression changed), refine the coarse `info` location to the precise span of
+# the mutated sub-expression when an enclosing imputed brace is available.
+# Returns `info` unchanged when no refinement applies.
+refine_mutation_info <- function(info, parsed, imputed_exprs, m) {
+  if (!is.list(info) || is.null(imputed_exprs) || length(m) != length(parsed)) {
+    return(info)
+  }
+  changed <- NULL
+  for (k in seq_along(parsed)) {
+    if (!identical(parsed[[k]], m[[k]])) {
+      changed <- k
+      break
+    }
+  }
+  if (is.null(changed)) {
+    return(info)
+  }
+  path <- mutation_diff_path(parsed[[changed]], m[[changed]])
+  if (is.null(path)) {
+    return(info)
+  }
+  sr <- tryCatch(
+    nearest_brace_srcref(parsed[[changed]], imputed_exprs[[changed]], path),
+    error = function(e) NULL
+  )
+  if (is.null(sr) || length(sr) < 4 || anyNA(sr[1:4])) {
+    return(info)
+  }
+  info$start_line <- as.integer(sr[1])
+  info$start_col <- as.integer(sr[2])
+  info$end_line <- as.integer(sr[3])
+  info$end_col <- as.integer(sr[4])
+  info
+}
+
 #' Generate Mutants for a Single R File
 #'
 #' Creates mutants for a single R source file by combining AST-based mutations
@@ -308,6 +471,15 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL,
     }
   )
 
+  # When the optional 'imputesrcref' package is installed, build a read-only
+  # imputed copy of the file's functions once, to sharpen operator-mutant
+  # locations below. NULL (and a no-op) otherwise.
+  imputed_exprs <- if (imputesrcref_available()) {
+    tryCatch(build_imputed_exprs(parsed), error = function(e) NULL)
+  } else {
+    NULL
+  }
+
   results <- list()
   base_name <- basename(src_file)
   idx <- 1L
@@ -332,6 +504,14 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL,
     # top-level expression's bounds, so this excludes at function granularity.)
     if (is.list(info) && is_excluded_range(info$start_line, info$end_line, excl$ranges)) {
       next
+    }
+
+    # Sharpen the reported location to the precise sub-expression span when the
+    # optional imputesrcref oracle is available. Done after the exclusion check
+    # so `# mutator:ignore-*` keeps its documented function-granular semantics
+    # regardless of whether the optional package is installed.
+    if (is.list(info) && !is.null(imputed_exprs)) {
+      info <- refine_mutation_info(info, parsed, imputed_exprs, m)
     }
 
     out_file <- file.path(out_dir, sprintf("%s_%03d.R", base_name, idx))
