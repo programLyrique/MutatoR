@@ -32,12 +32,6 @@ Suggests:
     pkgbuild
 Enhances:
     imputesrcref
-Config/Needs/check:
-    PRL-PRG/imputesrcref
-Config/Needs/coverage:
-    PRL-PRG/imputesrcref
-Config/Needs/website:
-    PRL-PRG/imputesrcref
 LinkingTo:
     testthat
 Config/testthat/edition: 3
