@@ -1560,6 +1560,37 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     }
   }
 
+  # TRUE if a `tests/` tree contains a testthat snapshot directory (`_snaps`).
+  tests_have_snapshots <- function(tests_dir) {
+    any(basename(list.dirs(tests_dir, recursive = TRUE)) == "_snaps")
+  }
+
+  # Mirror a `tests/` tree into a mutant package copy: directories are recreated
+  # as real dirs and files are symlinked to the shared original, EXCEPT any
+  # `_snaps` directory, which is deep-copied so each parallel mutant gets its own
+  # writable snapshot dir. Without this, a symlinked `_snaps` is shared across all
+  # parallel mutants; under the in-process testthat strategy, coverage-guided runs
+  # (which run filtered test subsets) make testthat rewrite the reference
+  # snapshots, corrupting the original package's `_snaps` and inflating the score
+  # with spurious kills. Only the small `_snaps` dir is copied; everything else
+  # stays a cheap symlink.
+  mirror_tests_isolating_snaps <- function(from, to) {
+    dir.create(to, recursive = TRUE, showWarnings = FALSE)
+    for (entry in list.files(from, all.files = TRUE, no.. = TRUE, full.names = TRUE)) {
+      name <- basename(entry)
+      target <- file.path(to, name)
+      if (dir.exists(entry)) {
+        if (identical(name, "_snaps")) {
+          file.copy(entry, to, recursive = TRUE)
+        } else {
+          mirror_tests_isolating_snaps(entry, target)
+        }
+      } else {
+        link_or_copy(entry, target)
+      }
+    }
+  }
+
   # When `isolate` is set, these directories are deep-copied into every mutant
   # package instead of being symlinked to the shared original. `src/` is the
   # directory R CMD INSTALL writes `.o`/`.so` into, so sharing it lets parallel
@@ -1583,6 +1614,12 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
         # Deep-copy the whole directory into the mutant package (recursive copy
         # places `entry` *inside* pkg_copy, creating pkg_copy/<name>).
         file.copy(entry, pkg_copy, recursive = TRUE)
+      } else if (identical(name, "tests") && dir.exists(entry) &&
+        identical(test_strategy, "testthat") && tests_have_snapshots(entry)) {
+        # Symlink the test files but give each mutant its own `_snaps` copy so
+        # parallel coverage-guided snapshot runs cannot corrupt the shared
+        # original `_snaps`. Only needed for the in-process testthat strategy.
+        mirror_tests_isolating_snaps(entry, target)
       } else {
         link_or_copy(entry, target, recursive = dir.exists(entry))
       }
