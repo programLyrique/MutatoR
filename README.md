@@ -2,6 +2,7 @@
 
 [![R-CMD-check](https://github.com/PRL-PRG/mutator/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/PRL-PRG/mutator/actions/workflows/R-CMD-check.yaml)
 [![Codecov test coverage](https://codecov.io/gh/PRL-PRG/mutator/graph/badge.svg)](https://app.codecov.io/gh/PRL-PRG/mutator)
+[![pkgdown reference](https://img.shields.io/badge/pkgdown-reference-blue.svg)](https://prl-prg.github.io/mutator/)
 
 <!-- badges: end -->
 
@@ -16,32 +17,19 @@ mutator is an automated mutation testing tool for the R language. It applies mut
 - **Comprehensive Mutation Testing**: Applies various mutation operators to R source code
 - **AST-Based Mutation**: Uses Abstract Syntax Tree analysis for intelligent code mutations
 - **Parallel Test Execution**: Runs tests in parallel for improved performance
+- **Coverage-guided Test Selection**: Runs only the tests that cover mutated lines, also for improved performance
 - **Equivalent Mutant Detection**: Uses AI to identify mutants that are functionally equivalent to the original code
 - **Detailed Reporting**: Provides mutation scores and analysis of test suite effectiveness
-
-## Package Structure
-
-```
-mutator/
-├── R/                      # R source code
-│   ├── mutator.R           # Core functionality
-│   └── init.R
-├── src/                    # C++ source + Catch2 C++ tests (testthat integration)
-├── tests/                  # R tests (includes compiled C++ test entrypoint)
-└── DESCRIPTION             # Package metadata
-```
 
 ## Installation
 
 ```r
-# Install dependencies
-install.packages(c("pkgload", "testthat", "httr", "jsonlite", "future", "furrr"))
+# Install from GitHub; package dependencies are installed automatically
+# install.packages("remotes")
+remotes::install_github("PRL-PRG/mutator")
 
-# Install from GitHub (if available)
-devtools::install_github("PRL-PRG/mutator")
-
-# Or install from local source
-# In R console
+# Or install from local source, in an R console
+# install.packages("devtools")
 setwd("path/to/mutator")
 devtools::install()
 ```
@@ -70,34 +58,25 @@ result <- mutate_package("path/to/your/package", timeout_seconds = 60)
 result <- mutate_package("path/to/your/package", mutation_dir = tempdir())
 ```
 
-## Testing
+See the [pkgdown reference](https://prl-prg.github.io/mutator/reference/) for
+the full argument and return-value documentation.
+
+## Mutation testing modes
 
 mutator selects a package test strategy automatically:
 
-- If `tests/testthat/` exists, mutator loads the mutant in-process with `pkgload::load_all()` and runs its tests the way the package's own `tests/testthat.R` harness does — forwarding the same arguments (notably any `filter`) that the harness passes to `testthat::test_check()` to `testthat::test_dir()`. This means mutator runs exactly the tests the package author (and `R CMD check`) run, without paying for an install per mutant.
+- If `tests/testthat/` exists, mutator loads the mutant in-process with `pkgload::load_all()` and mirrors the package's own `tests/testthat.R` harness by forwarding extractable arguments (notably any `filter`) from `testthat::test_check()` to `testthat::test_dir()`, without paying for an install per mutant.
 - Otherwise, if `tests/` exists, mutator falls back to `tools::testInstalledPackage(..., types = "tests")` after installing each mutant with `--install-tests`.
 
-The fallback path supports non-`testthat` layouts (for example `tinytest`-driven packages that run through `tests/` scripts). To avoid recompiling C/C++ on every mutant, mutator installs the unmutated package — compiling its shared objects — **once** into a template library, then installs each mutant with `--no-libs` (R code only) and restores the template's prebuilt shared objects before running its tests. This is safe because mutator does not mutate compiled code, so the shared object is identical for every mutant; it also means concurrent mutant installs no longer write into a shared `src/` (see "Parallel execution and isolation" below).
+The fallback path supports non-`testthat` layouts (for example `tinytest`-driven packages that run through `tests/` scripts). To avoid recompiling C/C++ on every mutant, mutator installs the unmutated package, compiling its shared objects, **once** into a template library, then installs each mutant with `--no-libs` (R code only) and restores the template's prebuilt shared objects before running its tests. This is safe because mutator does not mutate compiled code, so the shared object is identical for every mutant; it also means concurrent mutant installs no longer write into a shared `src/` (see "Parallel execution and isolation" below).
 
-Each mutant test run uses a timeout. By default, mutator runs the baseline suite first and derives the per-mutant timeout as `baseline_elapsed_seconds * 1.5`. You can override this by setting `timeout_seconds` explicitly.
+Each mutant test run uses a timeout. By default, mutator calibrates it from the baseline suite runtime under the current parallelism, with a small floor. You can override this by setting `timeout_seconds` explicitly.
 
 Mutant outcomes are reported as:
 
 - `SURVIVED`: tests passed for the mutant
 - `KILLED`: tests failed (or execution error)
 - `HANG`: mutant exceeded timeout
-
-mutator itself uses `testthat` for its own R tests and `testthat` + Catch2 for C++ tests.
-
-- C++ tests are located in `src/test-*.cpp`
-- The C++ test runner is `src/test-runner.cpp`
-- C++ tests are executed from `tests/testthat/test-cpp.R` via `run_cpp_tests("mutator")`
-
-Run the full test suite with:
-
-```r
-devtools::test()
-```
 
 ## Configuration
 
@@ -109,15 +88,15 @@ unless you pass `timeout_seconds` explicitly.
 
 Because mutants run in parallel (`cores` at a time), the timeout must account
 for **contention**: with many workers, each test run is slower than it would be
-alone — for packages that load many dependencies, or do heavy per-mutant install
-work, dramatically so. A timeout based on a single, *uncontended* baseline run
+alone for packages that load many dependencies, or do heavy per-mutant install
+work, dramatically so. A timeout based on a single, _uncontended_ baseline run
 would then fire on nearly every mutant (a wave of false `HANG`s).
 
 To avoid this, `mutate_package()` first runs the baseline suite once on its own
 (to confirm it passes and fail fast otherwise), then runs it `cores` times
-**concurrently** and takes the slowest of those as the *contended baseline*. The
+**concurrently** and takes the slowest of those as the _contended baseline_. The
 timeout is `max(contended_baseline * 1.5, 5s)`. This self-calibrates to the
-machine, the chosen parallelism, and the package's real load/compile cost — no
+machine, the chosen parallelism, and the package's real load/compile cost, avoiding
 manual tuning. Pass `timeout_seconds` to override it entirely. (When `cores = 1`,
 or when forking is unavailable, the solo baseline is used.)
 
@@ -127,7 +106,7 @@ By default `mutate_package()` runs each mutant's tests in **CRAN mode**
 (`cran = TRUE`): the `NOT_CRAN` environment variable is set to `"false"` in the
 test subprocess, so `testthat::skip_on_cran()` and `skip_if_offline()` guards
 take effect and mutator runs the same tests CRAN would. This skips the slow,
-flaky, or network-dependent tests that packages mark as CRAN-skippable — which
+flaky, or network-dependent tests that packages mark as CRAN-skippable, which
 keeps mutation runs fast and avoids spurious timeouts/kills from, e.g., tests
 that hit the network.
 
@@ -140,7 +119,7 @@ mutate_package("path/to/pkg", cran = FALSE)
 
 This applies to both test strategies (the `testthat` strategy and the
 installed-tests fallback). Note that it only affects tests the package
-*explicitly* guards with `skip_on_cran()` / `skip_if_offline()`; a package whose
+_explicitly_ guards with `skip_on_cran()` / `skip_if_offline()`; a package whose
 network test has no such guard will still run that test in either mode.
 
 ### Fail-fast (stop at the first failing test)
@@ -148,7 +127,7 @@ network test has no such guard will still run that test in either mode.
 A mutant is `KILLED` the instant any one test detects it, so running the rest of
 its suite is wasted work. By default (`fail_fast = TRUE`) each mutant's test run
 **stops at the first failing test** instead of finishing the suite, which speeds
-up the test-running phase — often substantially for packages with large suites —
+up the test-running phase (often substantially for packages with large suites)
 without changing any mutant's verdict (the early-aborted run still reports the
 failure, so the mutant is still `KILLED`).
 
@@ -160,14 +139,14 @@ mutate_package("path/to/pkg", fail_fast = FALSE)
 
 This applies to the `testthat` strategy (it sets `TESTTHAT_MAX_FAILS = 1` in the
 test subprocess and uses the progress reporter, which aborts the run at the first
-failing `test_that()` block). `SURVIVED` mutants are unaffected — they have no
-failure to short-circuit on — so baseline timing and timeout calibration are
+failing `test_that()` block). `SURVIVED` mutants are unaffected, as they have no
+failure to short-circuit on, so baseline timing and timeout calibration are
 unchanged. The installed-tests fallback already stops at the first failing test
-*file* regardless of this flag.
+_file_ regardless of this flag.
 
 ### Parallel execution and isolation (`isolate`)
 
-By default each mutant package copy *symlinks* the unchanged directories of the
+By default each mutant package copy _symlinks_ the unchanged directories of the
 original package (only the mutated `R/` file is materialised), so all parallel
 workers point at the same physical `src/`, `tests/`, etc. This is fast, and two
 design choices keep it correct:
@@ -180,12 +159,16 @@ design choices keep it correct:
   installs each mutant with `--no-libs`, which never writes into `src/`, so the
   race is gone. (The `testthat` strategy was always immune: `pkgload::load_all()`
   reuses the baseline's compiled `src/` since C code is never mutated.)
+- **Snapshot references are not shared.** For `testthat` packages with `_snaps`
+  directories, mutator gives each mutant its own snapshot copy while symlinking
+  the rest of `tests/`, so filtered or parallel runs cannot rewrite shared
+  snapshot references.
 
 The one remaining hazard is **non-hermetic tests that write files** into a shared
 directory (most often `tests/`). When parallel workers' tests fight over the same
 files you can still see spurious `KILLED`/`HANG`. Two ways to attenuate it:
 
-1. **Run without parallelism:** `cores = 1`. No contention, no extra disk — but
+1. **Run without parallelism:** `cores = 1`. No contention, no extra disk, but
    the slowest option.
 2. **Isolate file state:** `isolate = TRUE`. Each mutant gets its own deep copy
    of `src/` and `tests/` instead of a symlink, so file-writing tests can't
@@ -204,11 +187,9 @@ hermetic and you see parallel-only `KILLED`/`HANG` results.
 Not all code should be mutation-tested. Vendored/standalone files, generated
 code, or deprecated paths a suite is not meant to cover will mostly produce
 `SURVIVED` mutants and depress the score without telling you anything useful.
-(For example, mutating `scales` turns up dozens of survivors in its vendored
-`import-standalone-*.R` files — rlang snippets `scales` does not test.) There
-are two ways to exclude code.
+There are two ways to exclude code.
 
-**1. By file, at the call site — `exclude_files`.** A character vector of
+**1. By file, at the call site, with `exclude_files`.** A character vector of
 shell-style glob patterns matched against the base names of the `.R` files in
 `R/`. Matching files are skipped entirely before any mutants are generated:
 
@@ -234,12 +215,12 @@ mutate_package("path/to/scales", exclude_files = c("import-standalone-*"))
 
   An unmatched `-start` excludes through the end of the file.
 
-**Granularity caveat.** Excluding whole *files* and whole *functions* is
+**Granularity caveat.** Excluding whole _files_ and whole _functions_ is
 reliable. Finer than that is not, for operator mutations: R does not attach
 source references to nested expressions, so the engine resolves an operator
 mutant's position only to its enclosing top-level definition. A region directive
-inside a function therefore excludes that function's operator mutants as a group
-— you cannot single out one operator mid-function. Line-deletion mutants *are*
+inside a function therefore excludes that function's operator mutants as a group:
+you cannot single out one operator mid-function. Line-deletion mutants _are_
 excluded line-precisely. In practice, wrap whole functions, not fragments.
 
 ### Coverage-guided test selection (`coverage_guided`)
@@ -248,7 +229,7 @@ Most mutants are settled by a small subset of the suite, and a mutant on a line
 that **no test exercises** can never be killed. With `coverage_guided = TRUE`
 (`testthat` strategy only) mutator measures coverage once with
 [covr](https://covr.r-lib.org/) and then, for each mutant, runs only the test
-files that cover its mutated line — and skips running tests altogether for mutants
+files that cover its mutated line, and skips running tests altogether for mutants
 on uncovered lines (reported `SURVIVED` immediately).
 
 ```r
@@ -257,16 +238,16 @@ mutate_package("path/to/pkg", coverage_guided = TRUE)
 
 The single coverage run also serves as the baseline check (it runs the package's
 own `tests/testthat.R` harness, which fails if any test fails), so the suite is
-not run twice. Selection is at the **test-file** level — testthat filters tests by
-file — and assumes the suite deterministically exercises the code, so it changes
-*which* tests run without changing a mutant's verdict.
+not run twice. Selection is at the **test-file** level, as testthat filters tests by
+file, and assumes the suite deterministically exercises the code, so it changes
+_which_ tests run without changing a mutant's verdict.
 
 Requires the `covr` package. Coverage attribution (and therefore speed-up) depends
 on the backend (`coverage_backend`):
 
 - **`"record_tests"`** (default) uses covr's `record_tests` in a single run and
   relies only on covr's public output. Its limitation: covr credits a covered line
-  to the *deepest test-directory frame* on the call stack, so when a test reaches
+  to the _deepest test-directory frame_ on the call stack, so when a test reaches
   package code through a function defined in a `helper-*.R` / `setup-*.R` file
   (a common pattern), covr attributes it to the helper, not the originating
   `test-*.R`. The true triggering test is then unknown, so mutator conservatively
@@ -275,7 +256,7 @@ on the backend (`coverage_backend`):
 
 - **`"per_file"`** instruments the package once and runs the suite a single time
   through a reporter that snapshots coverage per test file, giving **exact
-  file-level attribution** with no helper fallback — at roughly the same cost as
+  file-level attribution** with no helper fallback, at roughly the same cost as
   the single `record_tests` run (often faster overall, since more mutants get a
   narrowed test set). It reaches into covr internals, so it is opt-in:
 
@@ -291,16 +272,15 @@ and tests exercise the code directly.
 Each reported mutant carries a source `Range:` (`start:col-end:col`). For
 statement- and line-deletion mutants this is precise, but **operator mutants**
 (`+`, `<`, `&&`, …) are different: R attaches no `srcref` to nested call
-objects, so the engine can only report the bounds of the *enclosing top-level
-expression* — effectively the whole function. A surviving `==`-to-`!=` mutant in
+objects, so the engine can only report the bounds of the _enclosing top-level
+expression_, effectively a loop body or even the whole function.
+A surviving `==`-to-`!=` mutant in
 a 40-line function therefore points at all 40 lines.
 
 If the optional [`imputesrcref`](https://github.com/PRL-PRG/imputesrcref) package
 is installed, `mutator` uses it to recover precise spans for many operator
-mutants — typically narrowing a whole-function range down to the exact
-sub-expression on a single line (in our `scales` measurements, ~58% of operator
-mutants became single-line, with the mean operator-mutant span dropping from ~34
-lines to ~11). It is a GitHub-only optional package listed in `Enhances`;
+mutants, typically narrowing a whole-function range down to the exact
+sub-expression on a single line. It is a GitHub-only optional package listed in `Enhances`;
 install it yourself to opt in:
 
 ```r
@@ -309,7 +289,7 @@ remotes::install_github("PRL-PRG/imputesrcref")
 ```
 
 When it is **not** installed, `mutator` behaves exactly as before (coarser
-operator ranges) — nothing else changes. The refinement is used only as a
+operator ranges); nothing else changes. The refinement is used only as a
 read-only source-location oracle: mutant files are deparsed from the original
 code and are **byte-for-byte identical** whether or not `imputesrcref` is
 present, and `# mutator:ignore-*` directives keep their function-granular
@@ -338,7 +318,7 @@ setting is resolved independently, so they can be mixed):
 
 2. **A `.openai_config` file** in the working directory (or in a directory you
    pass via `get_openai_config(dir = ...)`). It is a plain, human-readable file
-   of `field: value` lines and is *parsed, never executed*:
+   of `field: value` lines and is _parsed, never executed_:
 
    ```
    api_key: sk-...
@@ -346,7 +326,7 @@ setting is resolved independently, so they can be mixed):
    base_url: https://api.openai.com/v1
    ```
 
-   Only the given directory is consulted — parent directories are not searched.
+   Only the given directory is consulted. Parent directories are not searched.
 
 3. **Environment variables** `OPENAI_API_KEY`, `OPENAI_MODEL` and
    `OPENAI_BASE_URL`.
@@ -355,15 +335,21 @@ If nothing is configured, the model defaults to `gpt-4` and the base URL to the
 public OpenAI API. Set `base_url` to target a self-hosted or alternative
 OpenAI-compatible service (for example `http://localhost:11434/v1`).
 
+Enable the analysis when running package mutation tests:
+
+```r
+mutate_package("path/to/pkg", detectEqMutants = TRUE)
+```
+
 Survived mutants are analyzed in **bounded batches** (default 25 per request),
 and each mutant is shown to the model as a small **unified diff** of its edit
-(plus a short change label) rather than its full mutated source — compact,
+(plus a short change label) rather than its full mutated source. This is compact,
 unambiguous, and in a format LLMs read natively. When `mutate_package()` runs
 with `cores > 1` the batches are sent **concurrently**, which (with the bounded
 size) keeps the equivalence pass fast and avoids the truncated responses that
 otherwise drop verdicts.
 
-For mutants the model flags as **EQUIVALENT** (the rare, high-stakes calls — they
+For mutants the model flags as **EQUIVALENT** (they
 are excluded from the adjusted mutation score), it also returns a one-sentence
 **reason**, stored as `equivalence_reason` on the mutant so the call can be
 audited. No reason is requested for `NOT_EQUIVALENT`/`DONT_KNOW`, keeping
@@ -426,6 +412,22 @@ mutator depends on:
   - **xml2**: For running C++ tests through `testthat::run_cpp_tests()`
   - **covr**: For coverage-guided test selection (`coverage_guided = TRUE`)
   - **future** and **furrr**: For parallel execution
+  - **callr**: For subprocess test execution and hard timeouts
+  - **R6**: For the `per_file` coverage backend reporter
   - **httr** and **jsonlite**: For OpenAI API integration
 - **LinkingTo**: `testthat` (for Catch2 C++ test headers)
 - **C++17**: For native mutation engine implementation
+
+## mutator's test suite
+
+mutator itself uses `testthat` for its own R tests and `testthat` + Catch2 for C++ tests.
+
+- C++ tests are located in `src/test-*.cpp`
+- The C++ test runner is `src/test-runner.cpp`
+- C++ tests are executed from `tests/testthat/test-cpp.R` via `run_cpp_tests("mutator")`
+
+Run the full test suite with:
+
+```r
+devtools::test()
+```
