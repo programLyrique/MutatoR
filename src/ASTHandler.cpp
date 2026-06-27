@@ -130,8 +130,18 @@ static bool isFortyTwo(SEXP x)
     return !ISNA(REAL(x)[0]) && !ISNAN(REAL(x)[0]) && REAL(x)[0] == 42.0;
 }
 
+// The constant-value replacements -- numeric `0 -> 42` and `nonzero -> 0`
+// (makeScalarValueReplacement), plus assignment-RHS `-> 42` and ordinary-call
+// `-> 42` -- generate many low-signal / near-equivalent mutants and many trivial
+// type-error kills, so they are disabled for now. The code is kept intact; flip
+// this to `true` to re-enable the whole family.
+static constexpr bool kEnableValueReplacements = false;
+
 static SEXP makeScalarValueReplacement(SEXP x)
 {
+    if (!kEnableValueReplacements)
+        return R_NilValue;
+
     if (!isNumericScalarConstant(x))
         return R_NilValue;
 
@@ -176,6 +186,26 @@ static SEXP makeNAReplacement(SEXP x)
 static SEXP makeFortyTwo()
 {
     return Rf_ScalarReal(42.0);
+}
+
+// A length-1 NA of the requested R type: NA (logical), NA_integer_, NA_real_,
+// NA_character_. Used to swap an NA constant for a differently-typed NA, probing
+// coercion sensitivity (e.g. NA vs NA_real_ in `vapply`/`c()`/column types).
+static SEXP makeNAOfType(int type)
+{
+    switch (type)
+    {
+    case LGLSXP:
+        return Rf_ScalarLogical(NA_LOGICAL);
+    case INTSXP:
+        return Rf_ScalarInteger(NA_INTEGER);
+    case REALSXP:
+        return Rf_ScalarReal(NA_REAL);
+    case STRSXP:
+        return Rf_ScalarString(NA_STRING);
+    default:
+        return R_NilValue;
+    }
 }
 
 static SEXP makeNotCall(SEXP expr)
@@ -340,6 +370,23 @@ void ASTHandler::gatherOperatorsRecursive(SEXP expr, std::vector<int> path,
                                        expr, na_replacement, _file_path);
                 }
             }
+            else
+            {
+                // The constant is already an NA: swap it for each of the other
+                // typed NAs (NA <-> NA_integer_ <-> NA_real_ <-> NA_character_).
+                static const int na_types[] = {LGLSXP, INTSXP, REALSXP, STRSXP};
+                for (int ty : na_types)
+                {
+                    if (ty == TYPEOF(expr))
+                        continue;
+                    SEXP na_swap = makeNAOfType(ty);
+                    if (na_swap != R_NilValue)
+                    {
+                        addNodeReplacement(ops, path, _start_line, _start_col, _end_line, _end_col,
+                                           expr, na_swap, _file_path);
+                    }
+                }
+            }
 
             addNodeReplacement(ops, path, _start_line, _start_col, _end_line, _end_col,
                                expr, R_NilValue, _file_path);
@@ -419,7 +466,7 @@ void ASTHandler::gatherOperatorsRecursive(SEXP expr, std::vector<int> path,
         }
     }
 
-    if (isAssignmentSymbol(fun) && CDR(expr) != R_NilValue && CDDR(expr) != R_NilValue)
+    if (kEnableValueReplacements && isAssignmentSymbol(fun) && CDR(expr) != R_NilValue && CDDR(expr) != R_NilValue)
     {
         SEXP rhs = CADDR(expr);
         if (!isFortyTwo(rhs))
@@ -443,7 +490,7 @@ void ASTHandler::gatherOperatorsRecursive(SEXP expr, std::vector<int> path,
         }
     }
 
-    if (isOrdinaryFunctionCall(expr))
+    if (kEnableValueReplacements && isOrdinaryFunctionCall(expr))
     {
         addNodeReplacement(ops, path, node_start_line, node_start_col,
                            node_end_line, node_end_col, expr, makeFortyTwo(), _file_path);

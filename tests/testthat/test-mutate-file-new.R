@@ -148,13 +148,14 @@ test_that("C_mutate_file generates all operator mutants for a single expression"
   )
   symbols <- symbols[!is.na(symbols)]
 
-  # Three operator mutants plus three value mutations for each of four numeric
-  # constants (value flip, typed NA, NULL).
-  expect_length(mutants, 3 + 4 * 3)
+  # Three operator mutants plus two value mutations for each of four numeric
+  # constants (typed NA, NULL). The numeric value-flip / `-> 42` family is
+  # disabled (kept in C++ behind a flag).
+  expect_length(mutants, 3 + 4 * 2)
   expect_true(all(c("*", "+", "-") %in% sort(unique(symbols))))
 })
 
-test_that("C_mutate_file generates value and assignment mutants", {
+test_that("C_mutate_file generates typed-NA and NULL constant mutants", {
   exprs <- parse(text = "x <- f(0, 3L, \"a\", TRUE)", keep.source = TRUE)
 
   mutants <- .Call("C_mutate_file", exprs, PACKAGE = "mutator")
@@ -162,12 +163,16 @@ test_that("C_mutate_file generates value and assignment mutants", {
     paste(vapply(m, function(x) paste(deparse(x), collapse = "\n"), character(1)), collapse = "\n")
   }, character(1))
 
-  expect_true(any(grepl("x <- 42", code, fixed = TRUE)))
-  expect_true(any(grepl("f(0, 0L", code, fixed = TRUE)))
-  expect_true(any(grepl("NA_integer_", code, fixed = TRUE)))
-  expect_true(any(grepl("NA_character_", code, fixed = TRUE)))
-  expect_true(any(grepl("NA", code, fixed = TRUE)))
+  # Each constant becomes its typed NA and NULL.
+  expect_true(any(grepl("NA_real_", code, fixed = TRUE)))      # 0    -> NA_real_
+  expect_true(any(grepl("NA_integer_", code, fixed = TRUE)))   # 3L   -> NA_integer_
+  expect_true(any(grepl("NA_character_", code, fixed = TRUE))) # "a"  -> NA_character_
+  expect_true(any(grepl(", NA)", code, fixed = TRUE)))         # TRUE -> NA
   expect_true(any(grepl("NULL", code, fixed = TRUE)))
+  # The `-> 42` (assignment RHS, ordinary calls) and numeric value-flip families
+  # are disabled, so neither appears.
+  expect_false(any(grepl("x <- 42", code, fixed = TRUE)))
+  expect_false(any(grepl("0L", code, fixed = TRUE)))           # no 3L -> 0L flip
 })
 
 test_that("C_mutate_file restores logical negation mutants", {
@@ -194,15 +199,32 @@ test_that("C_mutate_file replaces only non-constant direct return values with NU
   expect_false(any(grepl("return(x)", code, fixed = TRUE) & grepl("return(NULL)", code, fixed = TRUE)))
 })
 
+test_that("C_mutate_file swaps NA constants between typed NAs", {
+  exprs <- parse(text = "f <- function() g(NA, NA_real_)", keep.source = TRUE)
+
+  mutants <- .Call("C_mutate_file", exprs, PACKAGE = "mutator")
+  code <- vapply(mutants, function(m) {
+    paste(vapply(m, function(x) paste(deparse(x), collapse = "\n"), character(1)), collapse = "\n")
+  }, character(1))
+
+  # plain NA (logical) -> the other typed NAs
+  expect_true(any(grepl("g(NA_integer_, NA_real_)", code, fixed = TRUE)))
+  expect_true(any(grepl("g(NA_character_, NA_real_)", code, fixed = TRUE)))
+  # NA_real_ -> a differently-typed NA
+  expect_true(any(grepl("g(NA, NA_integer_)", code, fixed = TRUE)))
+  expect_true(any(grepl("g(NA, NA_character_)", code, fixed = TRUE)))
+})
+
 test_that("C_mutate_file keeps accumulated mutants alive across expressions", {
   code <- paste(sprintf("x%d <- %d + %d", 1:80, 1:80, 1:80), collapse = "\n")
   exprs <- parse(text = code, keep.source = TRUE)
 
   mutants <- .Call("C_mutate_file", exprs, PACKAGE = "mutator")
 
-  # Per expression: assignment RHS -> 42, `+` -> `-`, and three mutations
-  # for each of the two numeric constants (value flip, typed NA, NULL).
-  expect_length(mutants, 80 * 8)
+  # Per expression: `+` -> `-`, and two mutations for each of the two numeric
+  # constants (typed NA, NULL). The assignment-RHS `-> 42` and value-flip
+  # families are disabled.
+  expect_length(mutants, 80 * 5)
   invisible(gc())
   expect_true(all(vapply(mutants, is.expression, logical(1))))
 })

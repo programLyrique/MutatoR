@@ -12,10 +12,13 @@ static SEXP asStringOrNA(SEXP x)
     if (TYPEOF(x) == SYMSXP)
         return Rf_mkString(CHAR(PRINTNAME(x)));
 
-    if (TYPEOF(x) == CHARSXP)
+    if (TYPEOF(x) == CHARSXP && x != NA_STRING)
         return Rf_ScalarString(x);
 
-    if (TYPEOF(x) == STRSXP && Rf_length(x) > 0)
+    // Non-NA character: show the string content. An NA string (NA_character_)
+    // falls through to deparse() below so it is labelled "NA_character_" rather
+    // than an R-level NA (which would render as "<deleted>").
+    if (TYPEOF(x) == STRSXP && Rf_length(x) > 0 && STRING_ELT(x, 0) != NA_STRING)
         return Rf_ScalarString(STRING_ELT(x, 0));
 
     int error = 0;
