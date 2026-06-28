@@ -202,6 +202,131 @@ filter_excluded_files <- function(r_files, exclude_files) {
   r_files[!excluded]
 }
 
+# Parse a mutant's `mutation_info` string ("File: <path>\nRange: sl:sc-el:ec\n
+# Details: <text>") into its components. Missing pieces come back as NA; when
+# `src` is supplied it overrides the File entry.
+parse_mutation_info <- function(mutation_info, src = NULL) {
+  out <- list(
+    file = if (is.null(src)) NA_character_ else src,
+    start_line = NA_integer_, start_col = NA_integer_,
+    end_line = NA_integer_, end_col = NA_integer_, details = NA_character_
+  )
+  if (is.null(mutation_info) || length(mutation_info) != 1L ||
+    is.na(mutation_info) || !nzchar(mutation_info)) {
+    return(out)
+  }
+  lines <- strsplit(mutation_info, "\n", fixed = TRUE)[[1]]
+  if (is.null(src)) {
+    fl <- grep("^File: ", lines, value = TRUE)
+    if (length(fl)) out$file <- sub("^File: ", "", fl[1])
+  }
+  rl <- grep("^Range: ", lines, value = TRUE)
+  if (length(rl)) {
+    m <- regmatches(rl[1], regexec("Range: ([0-9]+):([0-9]+)-([0-9]+):([0-9]+)", rl[1]))[[1]]
+    if (length(m) == 5L) {
+      out$start_line <- as.integer(m[2])
+      out$start_col <- as.integer(m[3])
+      out$end_line <- as.integer(m[4])
+      out$end_col <- as.integer(m[5])
+    }
+  }
+  dl <- grep("^Details: ", lines, value = TRUE)
+  if (length(dl)) out$details <- sub("^Details: ", "", dl[1])
+  out
+}
+
+# Build a console report (a character vector of lines) listing surviving mutants
+# with `file:line`, the mutation, and a bit of source context. `color = NULL`
+# auto-detects ANSI support (via cli, if installed); `context` is the number of
+# source lines shown either side of the mutated line; at most `max_show` mutants
+# are detailed.
+format_surviving_mutants <- function(survivors, pkg_dir = NULL, color = NULL, context = 1L, max_show = 50L) {
+  if (length(survivors) == 0L) {
+    return(character(0))
+  }
+  # Display a source path relative to pkg_dir (e.g. "R/calc.R") so it is locatable
+  # from the package root; fall back to the basename when it is not under pkg_dir.
+  disp_path <- function(path) {
+    if (is.na(path)) {
+      return("<unknown>")
+    }
+    if (!is.null(pkg_dir)) {
+      p <- tryCatch(normalizePath(path, mustWork = FALSE), error = function(e) path)
+      b <- tryCatch(normalizePath(pkg_dir, mustWork = FALSE), error = function(e) pkg_dir)
+      sep <- .Platform$file.sep
+      if (startsWith(p, paste0(b, sep))) {
+        return(substring(p, nchar(b) + 2L))
+      }
+    }
+    basename(path)
+  }
+  have_cli <- requireNamespace("cli", quietly = TRUE)
+  forced <- isTRUE(color)
+  if (is.null(color)) {
+    color <- have_cli && cli::num_ansi_colors() > 1L
+  }
+  styled <- isTRUE(color) && have_cli
+  # cli only emits ANSI when it detects a colour-capable connection. When the
+  # caller explicitly forces colour, tell cli to emit it regardless.
+  if (styled && forced && cli::num_ansi_colors() <= 1L) {
+    old <- options(cli.num_colors = 8L)
+    on.exit(options(old), add = TRUE)
+  }
+
+  out <- sprintf("Surviving mutants (%d):", length(survivors))
+  shown <- 0L
+  for (m in survivors) {
+    if (shown >= max_show) {
+      out <- c(out, sprintf("  ... and %d more (in result$package_mutants)", length(survivors) - shown))
+      break
+    }
+    shown <- shown + 1L
+    info <- parse_mutation_info(m$mutation_info, m$src)
+    file <- disp_path(info$file)
+    line <- info$start_line
+    det <- if (is.na(info$details)) "" else info$details
+    loc <- sprintf("%s:%s", file, if (is.na(line)) "?" else line)
+    out <- c(out, sprintf(
+      "  %s   %s",
+      if (styled) cli::style_bold(cli::col_cyan(loc)) else loc, det
+    ))
+
+    if (context > 0L && !is.na(line) && !is.null(m$src) && file.exists(m$src)) {
+      srclines <- tryCatch(readLines(m$src, warn = FALSE), error = function(e) character(0))
+      if (length(srclines) >= line) {
+        lo <- max(1L, line - context)
+        hi <- min(length(srclines), line + context)
+        width <- nchar(as.character(hi))
+        for (i in lo:hi) {
+          txt <- srclines[i]
+          if (i == line && styled) {
+            single_line <- !is.na(info$end_line) && info$end_line == info$start_line &&
+              !is.na(info$start_col) && !is.na(info$end_col)
+            if (single_line) {
+              sc <- max(1L, info$start_col)
+              ec <- min(info$end_col, nchar(txt))
+              if (ec >= sc) {
+                txt <- paste0(
+                  substr(txt, 1L, sc - 1L),
+                  cli::col_red(substr(txt, sc, ec)),
+                  substr(txt, ec + 1L, nchar(txt))
+                )
+              }
+            } else {
+              txt <- cli::style_bold(txt)
+            }
+          }
+          gutter <- if (i == line) ">" else " "
+          num <- formatC(i, width = width)
+          if (styled) num <- cli::col_grey(num)
+          out <- c(out, sprintf("    %s %s | %s", gutter, num, txt))
+        }
+      }
+    }
+  }
+  out
+}
+
 format_mutation_info <- function(src_file, raw_info = NULL) {
   file_path <- normalizePath(src_file, mustWork = FALSE)
   if (is.list(raw_info) && !is.null(raw_info$file_path) && length(raw_info$file_path) > 0 &&
@@ -2184,6 +2309,15 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     message(sprintf("  Adjusted Score:   %.2f%% (excluding equivalent mutants)", adjusted_mutation_score))
   } else {
     message(score_line)
+  }
+
+  # List the surviving mutants (file:line + mutation + a bit of source context)
+  # so the test gaps are visible directly in the console, not just in the result.
+  survivors <- Filter(function(m) identical(m$status, "SURVIVED"), package_mutants)
+  survivor_report <- format_surviving_mutants(survivors, pkg_dir = pkg_dir)
+  if (length(survivor_report) > 0) {
+    message("")
+    message(paste(survivor_report, collapse = "\n"))
   }
 
   timing <- list(

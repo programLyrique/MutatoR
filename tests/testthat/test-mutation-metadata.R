@@ -85,3 +85,62 @@ test_that("filter_excluded_files honours basename glob patterns", {
   # No exclusions -> unchanged.
   expect_identical(fef(files, NULL), files)
 })
+
+test_that("parse_mutation_info extracts file, range, and details", {
+  mi <- "File: /a/b/calc.R\nRange: 7:3-7:24\nDetails: 'if' -> '<deleted>'"
+  p <- mutator:::parse_mutation_info(mi)
+  expect_identical(p$file, "/a/b/calc.R")
+  expect_identical(p$start_line, 7L); expect_identical(p$start_col, 3L)
+  expect_identical(p$end_line, 7L);   expect_identical(p$end_col, 24L)
+  expect_identical(p$details, "'if' -> '<deleted>'")
+  expect_identical(mutator:::parse_mutation_info(mi, src = "/z.R")$file, "/z.R")  # src overrides
+  p0 <- mutator:::parse_mutation_info(NULL)
+  expect_true(is.na(p0$start_line) && is.na(p0$details))
+})
+
+test_that("format_surviving_mutants lists file:line, mutation, and source context", {
+  src <- tempfile(fileext = ".R")
+  writeLines(c("clamp <- function(x, lo, hi) {", "  if (x < lo) return(lo)",
+               "  if (x > hi) return(hi)", "  x", "}"), src)
+  surv <- list(list(status = "SURVIVED", src = src,
+    mutation_info = sprintf("File: %s\nRange: 3:3-3:24\nDetails: 'if' -> '<deleted>'", src)))
+  rep <- mutator:::format_surviving_mutants(surv, color = FALSE, context = 1L)
+  joined <- paste(rep, collapse = "\n")
+  expect_match(joined, "Surviving mutants \\(1\\):")
+  expect_match(joined, paste0(basename(src), ":3"), fixed = TRUE)
+  expect_match(joined, "'if' -> '<deleted>'", fixed = TRUE)
+  expect_match(joined, "if (x > hi) return(hi)", fixed = TRUE)   # context line shown
+  expect_match(joined, "> 3 |", fixed = TRUE)                    # target line marked
+  expect_false(any(grepl("\033", rep)))                          # no ANSI when color = FALSE
+  expect_length(mutator:::format_surviving_mutants(list()), 0L)
+})
+
+test_that("format_surviving_mutants caps the listing with max_show", {
+  src <- tempfile(fileext = ".R"); writeLines(c("a", "b", "c"), src)
+  surv <- replicate(5, list(status = "SURVIVED", src = src,
+    mutation_info = sprintf("File: %s\nRange: 1:1-1:1\nDetails: x -> y", src)), simplify = FALSE)
+  rep <- mutator:::format_surviving_mutants(surv, color = FALSE, context = 0L, max_show = 2L)
+  expect_match(paste(rep, collapse = "\n"), "and 3 more")
+})
+
+test_that("format_surviving_mutants emits ANSI when colour is forced", {
+  skip_if_not_installed("cli")
+  src <- tempfile(fileext = ".R"); writeLines(c("x", "y", "z"), src)
+  surv <- list(list(status = "SURVIVED", src = src,
+    mutation_info = sprintf("File: %s\nRange: 2:1-2:1\nDetails: y -> z", src)))
+  expect_true(any(grepl("\033\\[", mutator:::format_surviving_mutants(surv, color = TRUE))))
+})
+
+test_that("format_surviving_mutants shows the path relative to pkg_dir", {
+  pkg <- tempfile(); dir.create(file.path(pkg, "R"), recursive = TRUE)
+  src <- file.path(pkg, "R", "calc.R")
+  writeLines(c("f <- function(x) x", "g <- function(x) x > 0"), src)
+  surv <- list(list(status = "SURVIVED", src = src,
+    mutation_info = sprintf("File: %s\nRange: 2:1-2:22\nDetails: '>' -> '<'", src)))
+  rep <- mutator:::format_surviving_mutants(surv, pkg_dir = pkg, color = FALSE, context = 0L)
+  expect_match(paste(rep, collapse = "\n"), "R/calc.R:2", fixed = TRUE)   # relative to pkg_dir
+  # Without pkg_dir, falls back to the basename.
+  rep2 <- mutator:::format_surviving_mutants(surv, color = FALSE, context = 0L)
+  expect_match(paste(rep2, collapse = "\n"), "calc.R:2", fixed = TRUE)
+  expect_false(grepl("R/calc.R:2", paste(rep2, collapse = "\n"), fixed = TRUE))
+})

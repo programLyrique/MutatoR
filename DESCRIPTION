@@ -29,7 +29,8 @@ Imports:
     R6
 Suggests:
     xml2,
-    pkgbuild
+    pkgbuild,
+    cli
 Enhances:
     imputesrcref
 LinkingTo:
