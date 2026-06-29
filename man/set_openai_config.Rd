@@ -4,7 +4,12 @@
 \alias{set_openai_config}
 \title{Set OpenAI API configuration for the current session}
 \usage{
-set_openai_config(api_key = NULL, model = NULL, base_url = NULL)
+set_openai_config(
+  api_key = NULL,
+  model = NULL,
+  base_url = NULL,
+  max_parallel_requests = NULL
+)
 }
 \arguments{
 \item{api_key}{API key string.}
@@ -13,6 +18,11 @@ set_openai_config(api_key = NULL, model = NULL, base_url = NULL)
 
 \item{base_url}{Base URL of an OpenAI-compatible Chat Completions API, such
 as \code{"https://api.openai.com/v1"} or \code{"http://localhost:11434/v1"}.}
+
+\item{max_parallel_requests}{Maximum number of equivalence-detection API
+requests to run concurrently. Use this to stay under a provider's
+per-key parallel-request limit (exceeding it returns HTTP 429). \code{NA}
+(the default) imposes no cap beyond the run's own \code{cores}.}
 }
 \value{
 Invisibly, the resulting configuration (see \code{\link[=get_openai_config]{get_openai_config()}}).

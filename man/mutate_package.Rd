@@ -22,7 +22,8 @@ mutate_package(
   coverage_guided = FALSE,
   coverage_backend = c("record_tests", "per_file"),
   target_margin = NULL,
-  confidence = 0.95
+  confidence = 0.95,
+  max_show = 50L
 )
 }
 \arguments{
@@ -143,6 +144,10 @@ al., ISSRE 2015).}
 
 \item{confidence}{Confidence level for \code{target_margin} sizing and for the
 Wilson confidence interval reported on a sampled mutation score. Default 0.95.}
+
+\item{max_show}{Maximum number of surviving mutants to print to the console;
+the remainder are summarised as "... and N more" but always remain in the
+returned \code{package_mutants}. Use \code{Inf} to print every survivor. Default 50.}
 }
 \value{
 An invisible list with four components:

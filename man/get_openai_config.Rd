@@ -12,7 +12,9 @@ directory is consulted (parent directories are not). Defaults to the
 current working directory; pass \code{NULL} to ignore config files.}
 }
 \value{
-A list with elements \code{api_key}, \code{model} and \code{base_url}.
+A list with elements \code{api_key}, \code{model}, \code{base_url} and
+\code{max_parallel_requests} (an integer cap on concurrent API requests, or
+\code{NA} for no cap).
 }
 \description{
 Resolves the API key, model and base URL used for equivalent-mutant
@@ -24,8 +26,8 @@ detection. Each field is resolved independently, with this precedence
 \item values set with \code{\link[=set_openai_config]{set_openai_config()}};
 \item a \code{.openai_config} file in \code{dir} (a human-readable "field: value" file
 that is parsed, never executed);
-\item the environment variables \code{OPENAI_API_KEY}, \code{OPENAI_MODEL} and
-\code{OPENAI_BASE_URL};
+\item the environment variables \code{OPENAI_API_KEY}, \code{OPENAI_MODEL},
+\code{OPENAI_BASE_URL} and \code{OPENAI_MAX_PARALLEL_REQUESTS};
 \item built-in defaults (model \code{"gpt-4"}, the public OpenAI base URL).
 }
 }

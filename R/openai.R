@@ -102,8 +102,13 @@ identify_equivalent_mutants <- function(src_file, survived_mutants, api_config =
             message("Prompt being sent to OpenAI:\n", prompt)
         }
         response <- call_openai_api(prompt, api_config)
+        if (inherits(response, "openai_api_error")) {
+            # Propagate the cause so the caller can surface it; the empty vector
+            # marks the batch as having produced no verdicts.
+            return(structure(character(0), eq_error = response$message))
+        }
         if (is.null(response) || is.null(response$choices) || length(response$choices) == 0) {
-            return(NULL)
+            return(structure(character(0), eq_error = "empty or malformed API response"))
         }
         content <- response$choices[[1]]$message$content
         if (verbose) {
@@ -180,6 +185,24 @@ identify_equivalent_mutants <- function(src_file, survived_mutants, api_config =
         message(sprintf("  Uncertain:      %d", unknown_count))
     }
 
+    # Record batch outcomes so a caller running many batches in parallel (where
+    # the per-call warnings from forked workers may not surface) can report how
+    # many failed and why. A failed batch produced no verdicts (NULL/empty), so
+    # its mutants fell through to NA / "DONT KNOW" (Uncertain); the eq_error
+    # attribute carries the cause (HTTP body, network error) where known.
+    failed <- vapply(
+        batch_results,
+        function(r) is.null(r) || inherits(r, "try-error") || length(r) == 0,
+        logical(1)
+    )
+    eq_errors <- unlist(
+        lapply(batch_results, function(r) attr(r, "eq_error", exact = TRUE)),
+        use.names = FALSE
+    )
+    attr(survived_mutants, "eq_n_batches") <- length(batches)
+    attr(survived_mutants, "eq_failed_batches") <- sum(failed)
+    attr(survived_mutants, "eq_errors") <- eq_errors
+
     return(survived_mutants)
 }
 
@@ -243,8 +266,14 @@ create_equivalent_mutant_prompt <- function(original_code, mutant_details) {
 #' @param prompt The prompt to send to the API
 #' @param config API configuration with key and model information
 #'
-#' @return API response as text, or NULL if request failed
+#' @return On success, the parsed API response. On failure, an
+#'   `openai_api_error` object: a list with a `message` describing the cause
+#'   (HTTP status plus response body, or the network error), so callers can
+#'   surface *why* a request failed rather than a bare `NULL`.
 call_openai_api <- function(prompt, config) {
+    api_error <- function(message) {
+        structure(list(message = message), class = "openai_api_error")
+    }
     tryCatch(
         {
             # Create the request body without temperature parameter
@@ -290,22 +319,23 @@ call_openai_api <- function(prompt, config) {
                 encode = "json"
             )
 
-            # Check for HTTP errors
-            httr::stop_for_status(response)
-
-            if (httr::status_code(response) == 200) {
+            code <- httr::status_code(response)
+            if (code == 200) {
                 return(httr::content(response, as = "parsed", type = "application/json"))
-            } else {
-                warning(
-                    "OpenAI API error: ",
-                    httr::content(response, "text", encoding = "UTF-8")
-                )
-                return(NULL)
             }
+            # Keep the response body, not just the status reason: providers put
+            # the actionable detail there (e.g. "Invalid model name passed in
+            # model=qwen-3.5"). Trim so one bad batch cannot flood the console.
+            body <- tryCatch(
+                httr::content(response, "text", encoding = "UTF-8"),
+                error = function(e) ""
+            )
+            body <- gsub("\\s+", " ", trimws(as.character(body)))
+            if (nchar(body) > 300) body <- paste0(substr(body, 1, 300), "...")
+            api_error(sprintf("HTTP %s%s", code, if (nzchar(body)) paste0(": ", body) else ""))
         },
         error = function(e) {
-            warning("Error calling OpenAI API: ", e$message)
-            return(NULL)
+            api_error(conditionMessage(e))
         }
     )
 }
@@ -328,6 +358,10 @@ call_openai_api <- function(prompt, config) {
 #' @param model Model name (e.g. `"gpt-4"`).
 #' @param base_url Base URL of an OpenAI-compatible Chat Completions API, such
 #'   as `"https://api.openai.com/v1"` or `"http://localhost:11434/v1"`.
+#' @param max_parallel_requests Maximum number of equivalence-detection API
+#'   requests to run concurrently. Use this to stay under a provider's
+#'   per-key parallel-request limit (exceeding it returns HTTP 429). `NA`
+#'   (the default) imposes no cap beyond the run's own `cores`.
 #'
 #' @return Invisibly, the resulting configuration (see [get_openai_config()]).
 #'
@@ -337,10 +371,14 @@ call_openai_api <- function(prompt, config) {
 #' reset_openai_config()
 #'
 #' @export
-set_openai_config <- function(api_key = NULL, model = NULL, base_url = NULL) {
+set_openai_config <- function(api_key = NULL, model = NULL, base_url = NULL,
+                              max_parallel_requests = NULL) {
     if (!is.null(api_key)) assign("api_key", as.character(api_key)[1], envir = .openai_config_store)
     if (!is.null(model)) assign("model", as.character(model)[1], envir = .openai_config_store)
     if (!is.null(base_url)) assign("base_url", as.character(base_url)[1], envir = .openai_config_store)
+    if (!is.null(max_parallel_requests)) {
+        assign("max_parallel_requests", as.integer(max_parallel_requests)[1], envir = .openai_config_store)
+    }
     invisible(get_openai_config())
 }
 
@@ -370,15 +408,17 @@ reset_openai_config <- function() {
 #' 1. values set with [set_openai_config()];
 #' 2. a `.openai_config` file in `dir` (a human-readable "field: value" file
 #'    that is parsed, never executed);
-#' 3. the environment variables `OPENAI_API_KEY`, `OPENAI_MODEL` and
-#'    `OPENAI_BASE_URL`;
+#' 3. the environment variables `OPENAI_API_KEY`, `OPENAI_MODEL`,
+#'    `OPENAI_BASE_URL` and `OPENAI_MAX_PARALLEL_REQUESTS`;
 #' 4. built-in defaults (model `"gpt-4"`, the public OpenAI base URL).
 #'
 #' @param dir Directory to search for a `.openai_config` file. Only this
 #'   directory is consulted (parent directories are not). Defaults to the
 #'   current working directory; pass `NULL` to ignore config files.
 #'
-#' @return A list with elements `api_key`, `model` and `base_url`.
+#' @return A list with elements `api_key`, `model`, `base_url` and
+#'   `max_parallel_requests` (an integer cap on concurrent API requests, or
+#'   `NA` for no cap).
 #'
 #' @examples
 #' config <- get_openai_config()
@@ -386,12 +426,18 @@ reset_openai_config <- function() {
 #'
 #' @export
 get_openai_config <- function(dir = getwd()) {
-    defaults <- list(api_key = "", model = "gpt-4", base_url = .openai_default_base_url)
+    defaults <- list(
+        api_key = "", model = "gpt-4", base_url = .openai_default_base_url,
+        max_parallel_requests = NA_integer_
+    )
 
     env_cfg <- list()
     if (nzchar(Sys.getenv("OPENAI_API_KEY"))) env_cfg$api_key <- Sys.getenv("OPENAI_API_KEY")
     if (nzchar(Sys.getenv("OPENAI_MODEL"))) env_cfg$model <- Sys.getenv("OPENAI_MODEL")
     if (nzchar(Sys.getenv("OPENAI_BASE_URL"))) env_cfg$base_url <- Sys.getenv("OPENAI_BASE_URL")
+    if (nzchar(Sys.getenv("OPENAI_MAX_PARALLEL_REQUESTS"))) {
+        env_cfg$max_parallel_requests <- Sys.getenv("OPENAI_MAX_PARALLEL_REQUESTS")
+    }
 
     file_cfg <- if (!is.null(dir)) read_openai_config_file(dir) else list()
     store_cfg <- as.list(.openai_config_store)
@@ -408,12 +454,22 @@ get_openai_config <- function(dir = getwd()) {
         }
     }
 
-    list(api_key = pick("api_key"), model = pick("model"), base_url = pick("base_url"))
+    # A cap on concurrent API requests (e.g. a provider's max_parallel_requests).
+    # NA means "no cap": callers fall back to their own parallelism. Anything
+    # not a positive whole number is treated as no cap.
+    mpr <- suppressWarnings(as.integer(pick("max_parallel_requests")))
+    if (length(mpr) != 1L || is.na(mpr) || mpr < 1L) mpr <- NA_integer_
+
+    list(
+        api_key = pick("api_key"), model = pick("model"), base_url = pick("base_url"),
+        max_parallel_requests = mpr
+    )
 }
 
 # Read a `.openai_config` file (DCF: "field: value" lines) from `dir`. Returns a
-# named list of any of api_key/model/base_url present (case-insensitive). The
-# file is parsed, never executed, so it cannot run arbitrary code.
+# named list of any of api_key/model/base_url/max_parallel_requests present
+# (case-insensitive). The file is parsed, never executed, so it cannot run
+# arbitrary code.
 read_openai_config_file <- function(dir) {
     path <- file.path(dir, ".openai_config")
     if (!file.exists(path)) {
@@ -426,7 +482,7 @@ read_openai_config_file <- function(dir) {
 
     fields <- tolower(colnames(dcf))
     out <- list()
-    for (key in c("api_key", "model", "base_url")) {
+    for (key in c("api_key", "model", "base_url", "max_parallel_requests")) {
         idx <- match(key, fields)
         if (!is.na(idx)) {
             value <- trimws(unname(dcf[1L, idx]))
@@ -447,6 +503,41 @@ build_chat_completions_url <- function(base_url) {
     } else {
         paste0(base, "/chat/completions")
     }
+}
+
+# Best-effort query of an OpenAI-compatible proxy for this key's concurrency
+# limit. LiteLLM (which this targets) serves `GET {root}/key/info`, returning
+# `info$max_parallel_requests`. Returns a positive integer, or NA when
+# unavailable (any error, a non-LiteLLM endpoint, or no limit set on the key).
+# Never throws and uses a short timeout, so a slow or absent endpoint cannot
+# stall a run; callers treat NA as "no auto-detected cap".
+query_api_parallel_limit <- function(config) {
+    tryCatch(
+        {
+            base <- config$base_url
+            if (is.null(base) || !nzchar(base)) {
+                return(NA_integer_)
+            }
+            # Admin routes live at the server root, not under /v1.
+            root <- sub("/v1/?$", "", sub("/+$", "", base))
+            resp <- httr::GET(
+                paste0(root, "/key/info"),
+                httr::add_headers(Authorization = paste("Bearer", config$api_key)),
+                httr::timeout(5)
+            )
+            if (httr::status_code(resp) != 200) {
+                return(NA_integer_)
+            }
+            parsed <- httr::content(resp, as = "parsed", type = "application/json")
+            lim <- parsed$info$max_parallel_requests
+            if (is.null(lim)) {
+                return(NA_integer_)
+            }
+            lim <- suppressWarnings(as.integer(lim))
+            if (length(lim) != 1L || is.na(lim) || lim < 1L) NA_integer_ else lim
+        },
+        error = function(e) NA_integer_
+    )
 }
 
 # Build a minimal one-hunk unified diff between two vectors of lines. A mutant

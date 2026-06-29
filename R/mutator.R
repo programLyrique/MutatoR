@@ -1238,6 +1238,9 @@ list_test_tokens <- function(pkg_dir) {
 #'   al., ISSRE 2015).
 #' @param confidence Confidence level for `target_margin` sizing and for the
 #'   Wilson confidence interval reported on a sampled mutation score. Default 0.95.
+#' @param max_show Maximum number of surviving mutants to print to the console;
+#'   the remainder are summarised as "... and N more" but always remain in the
+#'   returned `package_mutants`. Use `Inf` to print every survivor. Default 50.
 #'
 #' @return An invisible list with four components:
 #' \describe{
@@ -1288,8 +1291,15 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
                            strategy = c("auto", "testthat", "installed"),
                            coverage_guided = FALSE,
                            coverage_backend = c("record_tests", "per_file"),
-                           target_margin = NULL, confidence = 0.95) {
+                           target_margin = NULL, confidence = 0.95,
+                           max_show = 50L) {
   strategy <- match.arg(strategy)
+  # Number of surviving mutants to print to the console (the rest remain in the
+  # returned `package_mutants`). `Inf` prints them all.
+  if (length(max_show) != 1 || is.na(max_show) ||
+    (is.finite(max_show) && max_show < 0)) {
+    stop("`max_show` must be a single non-negative number (or `Inf`).", call. = FALSE)
+  }
   coverage_backend <- match.arg(coverage_backend)
   if (!is.logical(coverage_guided) || length(coverage_guided) != 1L ||
     is.na(coverage_guided)) {
@@ -2356,6 +2366,25 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
       length(chunks), if (length(chunks) == 1) "" else "es"
     ))
     eq_workers <- max(1, min(workers_to_use, length(chunks)))
+    # Respect a cap on concurrent API requests (a provider's per-key
+    # max_parallel_requests; exceeding it returns HTTP 429). An explicit config
+    # value wins; otherwise best-effort auto-detect it from the endpoint (no-op
+    # against providers that do not expose it). Only worth probing when we would
+    # otherwise run more than one request at a time.
+    mpr <- api_config$max_parallel_requests
+    if ((is.null(mpr) || is.na(mpr)) && eq_workers > 1L) {
+      detected <- query_api_parallel_limit(api_config)
+      if (!is.na(detected)) {
+        mpr <- detected
+        message(sprintf(
+          "  Detected API parallel-request limit (%d); capping equivalence workers.",
+          detected
+        ))
+      }
+    }
+    if (!is.null(mpr) && !is.na(mpr) && mpr >= 1L) {
+      eq_workers <- min(eq_workers, as.integer(mpr))
+    }
     per_chunk <- if (eq_workers > 1 && future::supportsMulticore()) {
       # Same optional-pbmcapply progress bar as the mutant test runs.
       mc_lapply <- if (requireNamespace("pbmcapply", quietly = TRUE)) {
@@ -2368,11 +2397,28 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
       lapply(chunks, analyze_chunk)
     }
 
-    # Merge equivalence information back into the main package_mutants list.
+    # Merge equivalence information back into the main package_mutants list, and
+    # tally failed batches. A chunk that crashed outright (NULL / try-error)
+    # counts as one wholly-failed batch; an intact chunk reports its own count
+    # via the eq_failed_batches attribute (API calls that returned nothing
+    # usable, leaving those mutants Uncertain).
+    eq_batches_total <- 0L
+    eq_batches_failed <- 0L
+    eq_error_msgs <- character(0)
     for (chunk_mutants in per_chunk) {
       if (is.null(chunk_mutants) || inherits(chunk_mutants, "try-error")) {
+        eq_batches_total <- eq_batches_total + 1L
+        eq_batches_failed <- eq_batches_failed + 1L
+        if (inherits(chunk_mutants, "try-error")) {
+          eq_error_msgs <- c(eq_error_msgs, trimws(conditionMessage(attr(chunk_mutants, "condition"))))
+        }
         next
       }
+      nb <- attr(chunk_mutants, "eq_n_batches")
+      fb <- attr(chunk_mutants, "eq_failed_batches")
+      eq_batches_total <- eq_batches_total + (if (is.null(nb)) 1L else as.integer(nb))
+      eq_batches_failed <- eq_batches_failed + (if (is.null(fb)) 0L else as.integer(fb))
+      eq_error_msgs <- c(eq_error_msgs, attr(chunk_mutants, "eq_errors"))
       for (id in names(chunk_mutants)) {
         package_mutants[[id]]$equivalent <- chunk_mutants[[id]]$equivalent
         if (!is.null(chunk_mutants[[id]]$equivalence_status)) {
@@ -2380,6 +2426,27 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
         }
         if (!is.null(chunk_mutants[[id]]$equivalence_reason)) {
           package_mutants[[id]]$equivalence_reason <- chunk_mutants[[id]]$equivalence_reason
+        }
+      }
+    }
+
+    # One parent-side notice when batches failed: the per-call warnings are
+    # raised inside forked workers and may never reach the console. Include a
+    # few distinct causes so the reason is not hidden (e.g. an invalid model
+    # name returns the same HTTP 400 for every batch).
+    if (eq_batches_failed > 0L) {
+      message(sprintf(
+        "  Note: %d of %d equivalence batch(es) produced no verdicts (API error/timeout or unparseable response); their mutants are counted as Uncertain.",
+        eq_batches_failed, eq_batches_total
+      ))
+      distinct_errs <- unique(eq_error_msgs[nzchar(eq_error_msgs)])
+      if (length(distinct_errs) > 0) {
+        shown_errs <- utils::head(distinct_errs, 3L)
+        for (e in shown_errs) {
+          message(sprintf("    - %s", e))
+        }
+        if (length(distinct_errs) > length(shown_errs)) {
+          message(sprintf("    - ... and %d more distinct error(s)", length(distinct_errs) - length(shown_errs)))
         }
       }
     }
@@ -2432,7 +2499,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
   # List the surviving mutants (file:line + mutation + a bit of source context)
   # so the test gaps are visible directly in the console, not just in the result.
   survivors <- Filter(function(m) identical(m$status, "SURVIVED"), package_mutants)
-  survivor_report <- format_surviving_mutants(survivors, pkg_dir = pkg_dir)
+  survivor_report <- format_surviving_mutants(survivors, pkg_dir = pkg_dir, max_show = max_show)
   if (length(survivor_report) > 0) {
     message("")
     message(paste(survivor_report, collapse = "\n"))
