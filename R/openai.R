@@ -12,6 +12,10 @@
 #'   silently drops verdicts) and let batches run concurrently. Defaults to 25.
 #' @param workers Number of API requests to run concurrently (requires a
 #'   forking platform). Defaults to 1 (sequential).
+#' @param report Whether to print per-file progress and an equivalence summary
+#'   to the console. Defaults to `TRUE`. `mutate_package()` sets this to `FALSE`
+#'   when running many files in parallel, so it can print one aggregated summary
+#'   (and a single progress bar) instead of one per batch.
 #'
 #' @return Updated list of survived mutants with equivalence information
 #'
@@ -27,7 +31,7 @@
 #'
 #' @export
 identify_equivalent_mutants <- function(src_file, survived_mutants, api_config = NULL,
-                                        batch_size = 25, workers = 1) {
+                                        batch_size = 25, workers = 1, report = TRUE) {
     # Load API configuration if not provided
     if (is.null(api_config)) {
         api_config <- get_openai_config()
@@ -115,10 +119,12 @@ identify_equivalent_mutants <- function(src_file, survived_mutants, api_config =
         verdicts
     }
 
-    message(sprintf(
-        "Analyzing %d survived mutant(s) for %s in %d batch(es)...",
-        length(ids), basename(src_file), length(batches)
-    ))
+    if (report) {
+        message(sprintf(
+            "Analyzing %d survived mutant(s) for %s in %d batch(es)...",
+            length(ids), basename(src_file), length(batches)
+        ))
+    }
 
     # API calls are network-bound, so run batches concurrently when possible.
     use_parallel <- workers > 1 && length(batches) > 1 && future::supportsMulticore()
@@ -156,8 +162,8 @@ identify_equivalent_mutants <- function(src_file, survived_mutants, api_config =
             # the rare, high-stakes calls worth auditing.
             if (mid %in% names(reasons)) {
                 survived_mutants[[mid]]$equivalence_reason <- unname(reasons[[mid]])
-                message(sprintf("  EQUIVALENT %s: %s", mid, reasons[[mid]]))
-            } else {
+                if (report) message(sprintf("  EQUIVALENT %s: %s", mid, reasons[[mid]]))
+            } else if (report) {
                 message(sprintf("  EQUIVALENT %s (no reason given)", mid))
             }
         } else if (isFALSE(cls$equivalent)) {
@@ -167,10 +173,12 @@ identify_equivalent_mutants <- function(src_file, survived_mutants, api_config =
         }
     }
 
-    message("Equivalence Analysis Summary:")
-    message(sprintf("  Equivalent:     %d", equiv_count))
-    message(sprintf("  Not Equivalent: %d", not_equiv_count))
-    message(sprintf("  Uncertain:      %d", unknown_count))
+    if (report) {
+        message("Equivalence Analysis Summary:")
+        message(sprintf("  Equivalent:     %d", equiv_count))
+        message(sprintf("  Not Equivalent: %d", not_equiv_count))
+        message(sprintf("  Uncertain:      %d", unknown_count))
+    }
 
     return(survived_mutants)
 }

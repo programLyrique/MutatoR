@@ -9,7 +9,8 @@ identify_equivalent_mutants(
   survived_mutants,
   api_config = NULL,
   batch_size = 25,
-  workers = 1
+  workers = 1,
+  report = TRUE
 )
 }
 \arguments{
@@ -25,6 +26,11 @@ silently drops verdicts) and let batches run concurrently. Defaults to 25.}
 
 \item{workers}{Number of API requests to run concurrently (requires a
 forking platform). Defaults to 1 (sequential).}
+
+\item{report}{Whether to print per-file progress and an equivalence summary
+to the console. Defaults to \code{TRUE}. \code{mutate_package()} sets this to \code{FALSE}
+when running many files in parallel, so it can print one aggregated summary
+(and a single progress bar) instead of one per batch.}
 }
 \value{
 Updated list of survived mutants with equivalence information

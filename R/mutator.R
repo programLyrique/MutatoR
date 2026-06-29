@@ -235,6 +235,49 @@ parse_mutation_info <- function(mutation_info, src = NULL) {
   out
 }
 
+# Display a source path relative to pkg_dir (e.g. "R/calc.R") so it is locatable
+# from the package root; fall back to the basename when it is not under pkg_dir
+# (or pkg_dir is NULL).
+mutant_display_path <- function(path, pkg_dir = NULL) {
+  if (length(path) == 0L || is.na(path)) {
+    return("<unknown>")
+  }
+  if (!is.null(pkg_dir)) {
+    p <- tryCatch(normalizePath(path, mustWork = FALSE), error = function(e) path)
+    b <- tryCatch(normalizePath(pkg_dir, mustWork = FALSE), error = function(e) pkg_dir)
+    sep <- .Platform$file.sep
+    if (startsWith(p, paste0(b, sep))) {
+      return(substring(p, nchar(b) + 2L))
+    }
+  }
+  basename(path)
+}
+
+# The human-facing location label for a mutant record: "file:line" (or
+# "file:start-end" when the engine could only locate it to an enclosing block),
+# plus the mutation `details` string. Shared by the surviving- and
+# equivalent-mutant listings so both use identical notation. The mutant *id*
+# (its on-disk filename, e.g. "rounding.R_rounding.R_096.R", where 096 is a
+# sequential generation counter, NOT a source line) is never shown here.
+mutant_location_label <- function(m, pkg_dir = NULL) {
+  info <- parse_mutation_info(m$mutation_info, m$src)
+  file <- mutant_display_path(info$file, pkg_dir)
+  line <- info$start_line
+  end_line <- if (!is.na(info$end_line)) max(info$end_line, line) else line
+  multi_line <- !is.na(line) && end_line > line
+  line_label <- if (is.na(line)) {
+    "?"
+  } else if (multi_line) {
+    sprintf("%d-%d", line, end_line)
+  } else {
+    as.character(line)
+  }
+  list(
+    loc = sprintf("%s:%s", file, line_label),
+    details = if (is.na(info$details)) "" else info$details
+  )
+}
+
 # Build a console report (a character vector of lines) listing surviving mutants
 # with `file:line` (or `file:start-end` when the engine could only locate the
 # mutant to an enclosing block), the mutation, and a bit of source context.
@@ -246,22 +289,7 @@ format_surviving_mutants <- function(survivors, pkg_dir = NULL, color = NULL, co
   if (length(survivors) == 0L) {
     return(character(0))
   }
-  # Display a source path relative to pkg_dir (e.g. "R/calc.R") so it is locatable
-  # from the package root; fall back to the basename when it is not under pkg_dir.
-  disp_path <- function(path) {
-    if (is.na(path)) {
-      return("<unknown>")
-    }
-    if (!is.null(pkg_dir)) {
-      p <- tryCatch(normalizePath(path, mustWork = FALSE), error = function(e) path)
-      b <- tryCatch(normalizePath(pkg_dir, mustWork = FALSE), error = function(e) pkg_dir)
-      sep <- .Platform$file.sep
-      if (startsWith(p, paste0(b, sep))) {
-        return(substring(p, nchar(b) + 2L))
-      }
-    }
-    basename(path)
-  }
+  disp_path <- function(path) mutant_display_path(path, pkg_dir)
   have_cli <- requireNamespace("cli", quietly = TRUE)
   forced <- isTRUE(color)
   if (is.null(color)) {
@@ -1939,6 +1967,8 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
   # interval on the sampled mutation score (and to size a `target_margin` sample).
   total_generated <- length(mutant_specs)
 
+  message(sprintf("Generated %d mutants from %d source files.", total_generated, length(r_files)))
+
   # `target_margin` derives the sample size from a desired CI half-width (worst
   # case, finite-population corrected, capped at total_generated); `max_mutants`
   # is an explicit cap. Sampling happens before materializing package copies, so
@@ -2282,7 +2312,6 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
   # Identify equivalent mutants among survived mutants only if detectEqMutants is TRUE
   equivalence_started <- Sys.time()
   if (detectEqMutants && length(survived_mutants) > 0) {
-    message("Analyzing equivalent mutants among survived mutants...")
     # Group survived mutants by their originating source file. The source path
     # is carried on each mutant record, so we never have to recover it from the
     # mutant ID (filenames frequently contain '_' and '.').
@@ -2312,15 +2341,29 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     }
 
     analyze_chunk <- function(chunk) {
+      # report = FALSE: each chunk stays silent so its per-file messages and
+      # summary do not interleave across parallel workers (and corrupt the
+      # progress bar). The parent prints one aggregated summary below.
       identify_equivalent_mutants(
         chunk$src, survived_mutants[chunk$ids],
-        api_config = api_config, workers = 1, batch_size = eq_batch_size
+        api_config = api_config, workers = 1, batch_size = eq_batch_size,
+        report = FALSE
       )
     }
 
+    message(sprintf(
+      "Detecting equivalent mutants across %d batch%s...",
+      length(chunks), if (length(chunks) == 1) "" else "es"
+    ))
     eq_workers <- max(1, min(workers_to_use, length(chunks)))
     per_chunk <- if (eq_workers > 1 && future::supportsMulticore()) {
-      parallel::mclapply(chunks, analyze_chunk, mc.cores = eq_workers)
+      # Same optional-pbmcapply progress bar as the mutant test runs.
+      mc_lapply <- if (requireNamespace("pbmcapply", quietly = TRUE)) {
+        pbmcapply::pbmclapply
+      } else {
+        parallel::mclapply
+      }
+      mc_lapply(chunks, analyze_chunk, mc.cores = eq_workers)
     } else {
       lapply(chunks, analyze_chunk)
     }
@@ -2369,12 +2412,6 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     0
   }
 
-  message("Mutation Testing Summary:")
-  message(sprintf("  Total mutants:    %d", total_mutants))
-  message(sprintf("  Killed:           %d", killed))
-  message(sprintf("  Hanged:           %d", hanged))
-  message(sprintf("  Survived:         %d", survived))
-
   # When the tested set is a random sample of a larger generated population,
   # report a Wilson confidence interval so the precision of the score is explicit.
   mutation_score_ci <- if (total_mutants > 0 && total_generated > total_mutants) {
@@ -2392,17 +2429,6 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     sprintf("  Mutation Score:   %.2f%%", mutation_score)
   }
 
-  # Only print equivalent mutants and adjusted score if detectEqMutants is TRUE
-  if (detectEqMutants) {
-    message(sprintf("  Equivalent:       %d", equivalent))
-    message(sprintf("  Not Equivalent:   %d", not_equivalent))
-    message(sprintf("  Uncertain:        %d", uncertain))
-    message(score_line)
-    message(sprintf("  Adjusted Score:   %.2f%% (excluding equivalent mutants)", adjusted_mutation_score))
-  } else {
-    message(score_line)
-  }
-
   # List the surviving mutants (file:line + mutation + a bit of source context)
   # so the test gaps are visible directly in the console, not just in the result.
   survivors <- Filter(function(m) identical(m$status, "SURVIVED"), package_mutants)
@@ -2410,6 +2436,37 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
   if (length(survivor_report) > 0) {
     message("")
     message(paste(survivor_report, collapse = "\n"))
+  }
+
+  # Then, among those survivors, the ones judged EQUIVALENT (with the model's
+  # reason). Listed after the survivor report so it reads as a refinement of it,
+  # not as standalone output during the (earlier) equivalence-detection phase.
+  # Per-chunk reporting was suppressed (report = FALSE) so parallel workers would
+  # not interleave; this prints once, in a stable order.
+  if (detectEqMutants) {
+    equivalent_ids <- names(package_mutants)[vapply(
+      package_mutants, function(m) isTRUE(m$equivalent), logical(1)
+    )]
+    if (length(equivalent_ids) > 0) {
+      message("")
+      message(sprintf("Equivalent mutants (%d):", length(equivalent_ids)))
+      for (id in equivalent_ids) {
+        m <- package_mutants[[id]]
+        lab <- mutant_location_label(m, pkg_dir)
+        header <- if (nzchar(lab$details)) {
+          sprintf("  %s   %s", lab$loc, lab$details)
+        } else {
+          sprintf("  %s", lab$loc)
+        }
+        message(header)
+        reason <- m$equivalence_reason
+        if (is.null(reason) || !nzchar(reason)) {
+          message("    (no reason given)")
+        } else {
+          message(sprintf("    %s", reason))
+        }
+      }
+    }
   }
 
   timing <- list(
@@ -2424,6 +2481,25 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
   message(sprintf("  Mutant generation:     %.1f", timing$generation))
   message(sprintf("  Test execution:        %.1f", timing$test_execution))
   message(sprintf("  Equivalence detection: %.1f", timing$equivalence_detection))
+
+  # Printed last, after the (potentially long) survivor list, so the headline
+  # score and counts are the final thing on screen rather than scrolled off the
+  # top: users want the score first, then to scroll up into the mutants.
+  message("")
+  message("Mutation Testing Summary:")
+  message(sprintf("  Total mutants:    %d", total_mutants))
+  message(sprintf("  Killed:           %d", killed))
+  message(sprintf("  Hanged:           %d", hanged))
+  message(sprintf("  Survived:         %d", survived))
+  if (detectEqMutants) {
+    message(sprintf("  Equivalent:       %d", equivalent))
+    message(sprintf("  Not Equivalent:   %d", not_equivalent))
+    message(sprintf("  Uncertain:        %d", uncertain))
+    message(score_line)
+    message(sprintf("  Adjusted Score:   %.2f%% (excluding equivalent mutants)", adjusted_mutation_score))
+  } else {
+    message(score_line)
+  }
 
   invisible(list(
     package_mutants = package_mutants,
