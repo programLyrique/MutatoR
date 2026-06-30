@@ -12,9 +12,9 @@ real R packages:
 For each *tool × package* we report, capped to the **same mutant budget** so the
 numbers are comparable:
 
-- **performance** — end-to-end wall-clock (`wall_clock_s`) and `mutants_per_s`;
-- **effectiveness** — `killed`, `survived`, and `mutation_score` (= killed / tested);
-- **generation** — `generated_total`, the size of each tool's full mutant pool
+- **performance**: end-to-end wall-clock (`wall_clock_s`) and `mutants_per_s`;
+- **effectiveness**: `killed`, `survived`, and `mutation_score` (= killed / tested);
+- **generation**: `generated_total`, the size of each tool's full mutant pool
   before capping (the basis for the discrepancy analysis).
 
 A separate experiment (not here) will measure mutator's equivalence detection.
@@ -22,15 +22,15 @@ A separate experiment (not here) will measure mutator's equivalence detection.
 ## Targets
 
 **testthat packages** (all three tools): the five vendored packages under
-`packages/` with a real `tests/testthat/` suite — **prettyunits, stringr, forcats,
+`packages/` with a real `tests/testthat/` suite: **prettyunits, stringr, forcats,
 scales, jsonlite**. (`oRaklE` has a single test file, so it's excluded.)
 
 **Non-testthat packages** (mutator + universalmutator only; muttest is testthat-only
 and is auto-skipped): **lumberjack** (a **tinytest** package) and **R.methodsS3**
-(a **custom raw-`tests/*.R` harness** — base-R test scripts with `stopifnot`/`stop`
+(a **custom raw-`tests/*.R` harness**: base-R test scripts with `stopifnot`/`stop`
 assertions, no framework). Both are pure-R with green baselines here. These show the
 tools work beyond testthat. (`nanotime` was the original non-testthat candidate but
-is **dropped** — see below.)
+is **dropped**; see below.)
 
 ## Budget & confidence
 
@@ -41,10 +41,10 @@ mutation score is a sampled proportion, so a Wilson 95% CI (`score_ci_low/high`)
 reported whenever sampling occurred (N=500 ⇒ ≈ ±4.4 pp worst case, tighter for
 high scores or small pools via the finite-population effect).
 
-## Methodology — each tool at its best (documented)
+## Methodology: each tool at its best (documented)
 
 All three run the **identical test suite in CRAN mode** (`NOT_CRAN` unset/`"false"`,
-so `skip_on_cran()` prunes flaky/long tests) — the one cross-tool consistency
+so `skip_on_cran()` prunes flaky/long tests), the one cross-tool consistency
 override, applied so timing and kill signals are comparable.
 
 **Consistent exclusions.** mutator honors covr's `# nocov` regions and
@@ -53,7 +53,7 @@ the **same file set** via `tool_source_files()` (`lib/common.R`): files matched 
 `.covrignore` and whole-file `# nocov` files (e.g. `compat-*`,
 `import-standalone-*`) are excluded for every tool, so all three mutate only the
 "code under test." (Partial in-file `# nocov` regions are honored by mutator
-internally but not re-applied to the others — rare in these targets.)
+internally but not re-applied to the others; rare in these targets.)
 
 ### mutator (`tools/bench_mutator.R`)
 `mutate_package(work, cores = detectCores()-2, max_mutants = 500,
@@ -66,16 +66,16 @@ AST operator/constant mutants**, comparable to muttest and universalmutator (lin
 deletions are highly killable and would otherwise inflate mutator's score).
 Metrics come straight from `$summary` / `$timing`.
 
-### muttest (`tools/bench_muttest.R`) — two variants
-- **`muttest (full)`** — broadest preset set: `arithmetic_operators`,
+### muttest (`tools/bench_muttest.R`): two variants
+- **`muttest (full)`**, broadest preset set: `arithmetic_operators`,
   `comparison_operators`, `logical_operators`, `boolean_literals`, `na_literals`,
   `numeric_literals`, `string_literals`, `condition_mutations`, `index_mutations`,
   `delete_statement`, `replace_return_value`. muttest at its most capable.
-- **`muttest (matched)`** — restricted to the constructs mutator also mutates
+- **`muttest (matched)`**, restricted to the constructs mutator also mutates
   (`arithmetic` + `comparison` + `logical` + `delete_statement`), so its score is
   **directly comparable** to mutator and universalmutator. The full variant scores
   much lower because its literal/constant mutators (numbers, strings, booleans) are
-  rarely killed by tests — that gap measures mutator-set breadth, not suite quality.
+  rarely killed by tests, that gap measures mutator-set breadth, not suite quality.
 
 `muttest(plan, workers = detectCores()-2, test_strategy = default_test_strategy(),
 timeout = Inf)`. Full test strategy (the faster `FileTestStrategy` trades accuracy
@@ -96,9 +96,9 @@ fresh-process-per-mutant ground truth):
    **error/crash** is scored **survived**. mutator, universalmutator, and standard
    mutation-testing practice count crashes as kills. We therefore report two rows
    from the *same* muttest run, via a `MutationReporter` subclass (muttest's own
-   extension API — runner and mutations untouched):
-   - **`muttest (<variant>)`** — muttest's native score (expectation-failures only);
-   - **`muttest (<variant>+err)`** — comparable score (failed **OR** errored),
+   extension API; runner and mutations untouched):
+   - **`muttest (<variant>)`**: muttest's native score (expectation-failures only);
+   - **`muttest (<variant>+err)`**: comparable score (failed **OR** errored),
      which matches the fresh-process ground truth (stringr 50-sample: native
      31/50 = 62%, errors-as-kills 41/50 = **82%** = ground truth).
 
@@ -108,7 +108,7 @@ fresh-process-per-mutant ground truth):
 So muttest appears in the tables as up to four rows per package: full / matched ×
 native / errors-as-kills.
 
-### universalmutator — regex mode (`tools/bench_universalmutator.R`)
+### universalmutator: regex mode (`tools/bench_universalmutator.R`)
 Single-file tool, orchestrated to package level: `mutate <file> r --noCheck`
 every `R/` file, pool all mutants, sample N, then `analyze_mutants` each sampled
 mutant with the CRAN-mode test command (**exit 0 = survived, non-zero = killed**).
@@ -119,7 +119,7 @@ candidate substitution, so generating the pool for one package took **~13 min**;
 regex mode produces a comparable pool in **~1.5 s** (≈1000× faster) for the same
 package. comby is still wired behind `mode = "comby"`, but regex is used.
 
-**Validity filter (important).** universalmutator's "compile" step does two jobs —
+**Validity filter (important).** universalmutator's "compile" step does two jobs:
 validity (drop mutants that don't compile/parse) and Trivial Compiler Equivalence
 (drop mutants compiling identically to the original). For R its handler is a stub
 that always returns `VALID`, and we pass `--noCheck`, so **neither runs**: textual
@@ -128,19 +128,19 @@ fires inside the assignment arrow) that would be killed instantly and inflate th
 score. Since the AST tools only ever emit parseable mutants, we add a **parse
 validity filter**: each generated mutant is `parse()`d in one R session and the
 non-parseable ones are dropped before sampling. (Equivalent to universalmutator's
-`mutate --cmd "Rscript -e parse(MUTANT)"`, but in-process — per-mutant Rscript
+`mutate --cmd "Rscript -e parse(MUTANT)"`, but in-process; per-mutant Rscript
 spawns would erase the regex speed advantage.) It is validity-only, not TCE dedup.
 `generated_total` reports the **valid** pool; `notes` carries the raw pool size and
 the count dropped as invalid.
 
 **Not coverage-guided (deliberately).** mutator's `coverage_guided` is only a
-test-*selection* speedup — it does not change verdicts; a mutant on an uncovered
+test-*selection* speedup. It does not change verdicts; a mutant on an uncovered
 line is still counted as **SURVIVED**. So mutator's denominator is *all* mutable
 lines (minus nocov/.covrignore files). For universalmutator to match that
 population it must mutate **all** lines too (uncovered-line mutants then survive,
 as in mutator). Restricting universalmutator to covered lines would drop exactly
-those survivors and inflate its score — and brings no speed benefit (covr overhead;
-the analyzed count is capped at N regardless). A `coverage_guided` option remains in
+those survivors and inflate its score; it also brings no speed benefit (covr
+overhead; the analyzed count is capped at N regardless). A `coverage_guided` option remains in
 the wrapper (`mutate --lines <covered>`) but is **off** for the benchmark.
 
 Residual caveat: universalmutator's universal rules still produce more
@@ -154,9 +154,9 @@ high relative to mutator/muttest even after validity filtering.
 non-testthat package (coverage-guided is testthat-only), and **muttest is
 auto-skipped** (it is hard-wired to `testthat::test_dir`):
 
-- **testthat** (`tests/testthat/`) — `load_all` + `test_dir(stop_on_failure)`.
-- **tinytest** (`inst/tinytest/`) — `load_all` + `tinytest::run_test_dir`.
-- **rtests** (raw `tests/*.R`, no framework) — `lib/run_rtests.R` runs **each test
+- **testthat** (`tests/testthat/`): `load_all` + `test_dir(stop_on_failure)`.
+- **tinytest** (`inst/tinytest/`): `load_all` + `tinytest::run_test_dir`.
+- **rtests** (raw `tests/*.R`, no framework): `lib/run_rtests.R` runs **each test
   file in its own fresh R process** with the package loaded (matching R CMD check,
   where files don't share state); exit non-zero if any errors. Running all files in
   one session gives spurious failures from state leakage, so per-file isolation is
@@ -209,7 +209,7 @@ score_ci_low, score_ci_high, wall_clock_s, mutants_per_s, notes`.
 
 **Self-contained per package.** For each `--packages` target the driver, as a first
 step:
-1. **fetches the source** if it's not already under `packages/` —
+1. **fetches the source** if it's not already under `packages/`:
    `ensure_package_source()` downloads the CRAN source tarball and extracts it in
    place (skipped if the dir exists; a non-CRAN package that's absent is skipped
    with a notice);
@@ -228,32 +228,42 @@ whose suite isn't green after deps are installed.
 
 N = 500 mutants/tool/package (sampled; fewer when a tool's pool < 500, then
 exact). Full machine-generated tables are in `results/SUMMARY.md` and the raw data
-in `results/benchmark_results*.csv`. The 5 testthat packages completed; **nanotime
-was dropped** (see below).
+in `results/benchmark_results*.csv`. **7 packages** completed, 5 testthat + 2
+non-testthat (lumberjack/tinytest, R.methodsS3/custom). **nanotime was dropped**
+(see below).
 
-### Mutation score — comparable basis
+### Mutation score: comparable basis
 
 muttest's *native* score counts only expectation-failures; the **errors-as-kills**
 score (failed **or** errored) is the one comparable to mutator and universalmutator
 (which both count crashes as kills). The headline comparison uses the comparable
 basis:
 
-| Package | mutator | muttest (matched, err=kill) | universalmutator | muttest *native* (matched) |
-|---|--:|--:|--:|--:|
-| prettyunits | **88.2** | 84.3 | **93.0** | 58.5 |
-| stringr | 75.4 | 71.7 | **91.4** | 37.4 |
-| forcats | 70.4 | **99.7** | 89.0 | 98.6 |
-| scales | 65.0 | **100.0** | 77.0 | 98.4 |
-| jsonlite | 79.0 | **100.0** | 99.8 | 23.0 |
+| Package | harness | mutator | muttest (matched, err=kill) | universalmutator | muttest *native* (matched) |
+|---|---|--:|--:|--:|--:|
+| prettyunits | testthat | **88.2** | 84.3 | **93.0** | 58.5 |
+| stringr | testthat | 75.4 | 71.7 | **91.4** | 37.4 |
+| forcats | testthat | 70.4 | **99.7** | 89.0 | 98.6 |
+| scales | testthat | 65.0 | **100.0** | 77.0 | 98.4 |
+| jsonlite | testthat | 79.0 | **100.0** | 99.8 | 23.0 |
+| lumberjack | tinytest | 63.0 |, (n/a) | **80.0** |, |
+| R.methodsS3 | custom rtests | 43.6 |, (n/a) | **72.3** |, |
+
+(muttest is testthat-only → not applicable to the two non-testthat packages.)
 
 Takeaways:
 - **No tool dominates.** mutator leads on prettyunits/stringr; muttest is near-perfect
-  on forcats/scales/jsonlite; universalmutator is uniformly high (77–99.8%).
+  on forcats/scales/jsonlite; universalmutator is uniformly high (72–99.8%).
 - **universalmutator scores high everywhere** because its rule-less textual rewrites
   are *disruptive* (identifier/operator/constant swaps that crash code → killed),
   even after the parse-validity filter.
-- **mutator is lowest on forcats (70) and scales (65)** — its surviving mutants are
-  the open question flagged below.
+- **mutator is lowest on forcats (70), scales (65), R.methodsS3 (44)**, its surviving
+  mutants are the open question flagged below. R.methodsS3's raw smoke-style tests
+  (mostly run-without-error, few value assertions) are weak, which also depresses
+  mutator more than universalmutator's crash-prone mutants.
+- **Both non-testthat harnesses work** for mutator (installed strategy) and
+  universalmutator (tinytest / rtests oracles), demonstrating the tools generalize
+  beyond testthat.
 
 ### muttest native vs. errors-as-kills (the kill-definition effect)
 
@@ -279,17 +289,24 @@ muttest's native score would badly misrepresent its detection ability.
 | forcats | 225s | 510s | 376s | 1561s |
 | scales | 281s | 716s | 1874s¹ | 2551s |
 | jsonlite | 117s | 742s | 741s | 2130s |
+| lumberjack | 323s | n/a | n/a | 395s |
+| R.methodsS3 | 325s | n/a | n/a | 3439s² |
 
-- **mutator is fastest** (117–281s) — parallel + coverage-guided *test selection*
-  (runs only the tests covering each mutant), and it scales well to large packages.
+- **mutator is fastest** (117–325s), parallel + coverage-guided *test selection*
+  (runs only the tests covering each mutant) on testthat packages. On non-testthat
+  packages it uses the *installed* strategy (reinstalls per mutant), hence the
+  higher 323–325s.
 - **muttest** is 2–8× slower (parallel workers, but full suite per mutant).
-- **universalmutator is 5–18× slower than mutator** — sequential, fresh R process
+- **universalmutator is 5–18× slower than mutator**, sequential, fresh R process
   per mutant.
 - ¹ scales muttest-matched includes a 30-min bounded timeout: one operator mutant
   causes an **infinite loop**; with `timeout=1800s` it is killed and counted as an
   error-kill (see muttest notes above).
+- ² R.methodsS3-um is the slowest cell: its **rtests** oracle runs each of the
+  package's test files in a *separate* R process per mutant (R-CMD-check semantics),
+  so per-mutant cost is multiplied by the test-file count.
 
-### Discrepancy analysis — mutants generated (full pool, before capping)
+### Discrepancy analysis: mutants generated (full pool, before capping)
 
 | Package | mutator | muttest (full) | muttest (matched) | universalmutator |
 |---|--:|--:|--:|--:|
@@ -298,14 +315,16 @@ muttest's native score would badly misrepresent its detection ability.
 | forcats | 788 | 692 | 360 | 3,412 |
 | scales | 4,720 | 4,794 | 1,716 | 18,470 |
 | jsonlite | 2,240 | 1,946 | 699 | 7,140 |
+| lumberjack | 654 | n/a | n/a | 2,564 |
+| R.methodsS3 | 1,197 | n/a | n/a | 4,116 |
 
 (universalmutator counts are the **valid** pool after the parse filter; it discards
-~25–35% non-parseable textual mutants — e.g. `<-`→`<+` — before this.)
+~25–35% non-parseable textual mutants, e.g. `<-`→`<+`, before this.)
 
 Why the pools differ so much:
-- **mutator ≈ muttest (full)** in magnitude — both are AST/tree-sitter, package-aware,
+- **mutator ≈ muttest (full)** in magnitude, both are AST/tree-sitter, package-aware,
   one mutant per mutable node. mutator additionally mutates constants/`NA`/strings;
-  muttest (full) adds literal/index/return mutators — hence similar totals.
+  muttest (full) adds literal/index/return mutators, hence similar totals.
 - **muttest (matched)** is ~⅓–½ of full: operators + statement-deletion only.
 - **universalmutator is 3–10× larger** than the AST tools: it applies the *universal*
   text rules at every textual match with **no R-aware dedup/validity** (its TCE step
@@ -314,34 +333,30 @@ Why the pools differ so much:
 
 Operator-repertoire and coverage effects:
 - The **score** differences track *what* each tool mutates and *where*. mutator's
-  constant→`NULL`/`NA` mutations tend to crash (killable), but its coverage-guided
-  population also *counts mutants on uncovered lines as SURVIVED* — a likely
-  contributor to its lower forcats/scales scores (large packages with more
-  untested code).
-- **Open item (not yet verified):** whether mutator's forcats/scales survivors are
-  genuine survivors or artifacts of `coverage_guided` attribution (a covr
-  under-attributed line would be auto-marked SURVIVED). muttest's low scores were
-  verified against a fresh-process ground truth (below); the symmetric check for
-  mutator is still TODO.
+  constant→`NULL`/`NA` mutations tend to crash (killable); its coverage-guided
+  population also *counts mutants on uncovered lines as SURVIVED*, which contributes
+  to its lower forcats/scales scores (larger packages with more untested code).
+- **Verified genuine (not a coverage-guidance artifact).** Re-running mutator with
+  `coverage_guided=FALSE` (full suite per mutant = ground truth) at the same seed
+  reproduces the coverage-guided scores exactly: **forcats 70.4% = 70.4%**, and
+  **scales 66% = 66%** (budget-200 control, `isolate=TRUE`). So coverage-guidance
+  does not manufacture false survivors here, mutator's lower scores reflect real
+  test-suite gaps. (R.methodsS3's 43.6% is already ground-truth: its installed
+  strategy uses no coverage-guidance, and its raw smoke-tests assert little.)
+- **mutator bug found during this check:** `coverage_guided=FALSE` + `isolate=FALSE`
+  (symlinked copies) on scales makes every mutant's test run fail with
+  `cannot open the connection` → spurious 100% kill in ~20s. The benchmark uses
+  `coverage_guided=TRUE` (which works correctly), so results are unaffected; but the
+  `FALSE`+symlink path has a fixture/cwd issue worth fixing in mutator. `isolate=TRUE`
+  avoids it.
 
 ### muttest reliability findings (verified)
 
 Both surfaced during this benchmark and were handled within muttest's own API
 (see the muttest methodology section):
-1. **Timeout from task submission** — finite `timeout` made queued mutants
+1. **Timeout from task submission**: finite `timeout` made queued mutants
    spuriously "time out" as non-kills (stringr 6.8% at `timeout=120s`). Verified
    against a fresh-process ground truth (82%); fixed with a large finite timeout.
-2. **Errors ≠ kills** — muttest scores crash-inducing mutants as *survived*; the
+2. **Errors ≠ kills**: muttest scores crash-inducing mutants as *survived*; the
    errors-as-kills reporter (validated to reproduce the 82% ground truth) restores
    comparability.
-
-### nanotime (dropped)
-
-nanotime was intended as a non-testthat (tinytest) data point. Its `tinytest` suite
-does **not pass in this environment** even when the package is installed and run the
-intended way (`tinytest::test_package`): it errors with `as.nanoduration: too many
-arguments`, a dependency version skew (`bit64`/`integer64`) independent of any
-mutation tool. With no green baseline, mutation kills can't be distinguished from a
-broken suite, so nanotime is excluded. The tinytest harness itself
-(`test_command()` + `mutate_package` installed strategy) is wired and would apply to
-a green tinytest package; muttest cannot participate regardless (testthat-only).

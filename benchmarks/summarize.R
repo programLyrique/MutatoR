@@ -68,12 +68,86 @@ disc_tbl <- function(d) {
   paste(c(hdr, sep, rows), collapse = "\n")
 }
 
+# --- (0) top-level headline: one row per package, comparable scores, time, and
+#         time as a multiple of the PLAIN (no-covr) suite baseline -------------
+# Plain baselines come from results/baselines.csv (run measure_baselines.R first).
+bfile <- file.path(dirname(csv), "baselines.csv")
+baselines <- if (file.exists(bfile)) {
+  b <- read.csv(bfile, stringsAsFactors = FALSE); setNames(b$baseline_s, b$package)
+} else NULL
+
+summary_records <- function(d, baselines) {
+  pick <- function(pk, tool, modes) {            # first matching mode, else NULL
+    for (m in modes) {
+      r <- d[d$package == pk & d$tool == tool & d$mode == m, ]
+      if (nrow(r)) return(r[1, ])
+    }
+    NULL
+  }
+  sc <- function(r) if (is.null(r)) NA_real_ else r$mutation_score
+  tm <- function(r) if (is.null(r)) NA_real_ else r$wall_clock_s
+  do.call(rbind, lapply(unique(d$package), function(pk) {
+    mu   <- pick(pk, "mutator", "default")
+    mt_s <- pick(pk, "muttest", c("matched+err", "full+err"))  # comparable score
+    mt_t <- pick(pk, "muttest", c("matched", "full"))          # its run-time
+    um   <- pick(pk, "universalmutator", c("regex", "comby"))
+    base <- if (!is.null(baselines) && pk %in% names(baselines)) baselines[[pk]] else NA_real_
+    xb   <- function(r) { t <- tm(r); if (is.na(t) || is.na(base) || base <= 0) NA_real_ else round(t / base) }
+    data.frame(package = pk,
+      harness = if (!is.null(mt_s)) "testthat" else "non-testthat",
+      baseline_s = base,
+      mutator_score = sc(mu), mutator_s = tm(mu), mutator_x_base = xb(mu),
+      muttest_score = sc(mt_s), muttest_s = tm(mt_t), muttest_x_base = xb(mt_t),
+      um_score = sc(um), um_s = tm(um), um_x_base = xb(um),
+      stringsAsFactors = FALSE)
+  }))
+}
+
+recs <- summary_records(d, baselines)
+
+# markdown helpers
+.p  <- function(x) ifelse(is.na(x), "n/a", sprintf("%.1f", x))
+.s  <- function(x) ifelse(is.na(x), "n/a", paste0(round(x), "s"))
+.x  <- function(x) ifelse(is.na(x), "n/a", paste0(round(x), "x"))
+
+scores_md <- paste(c(
+  "| Package | harness | mutator % | muttest % | universalmutator % |",
+  "|---|---|--:|--:|--:|",
+  apply(recs, 1, function(r) sprintf("| %s | %s | %s | %s | %s |",
+    r["package"], r["harness"], .p(as.numeric(r["mutator_score"])),
+    .p(as.numeric(r["muttest_score"])), .p(as.numeric(r["um_score"]))))),
+  collapse = "\n")
+
+cost_md <- paste(c(
+  "| Package | plain baseline | mutator | muttest | universalmutator |",
+  "|---|--:|--:|--:|--:|",
+  apply(recs, 1, function(r) sprintf("| %s | %s | %s (%s) | %s (%s) | %s (%s) |",
+    r["package"], ifelse(is.na(as.numeric(r["baseline_s"])), "n/a",
+                         sprintf("%.1fs", as.numeric(r["baseline_s"]))),
+    .s(as.numeric(r["mutator_s"])), .x(as.numeric(r["mutator_x_base"])),
+    .s(as.numeric(r["muttest_s"])), .x(as.numeric(r["muttest_x_base"])),
+    .s(as.numeric(r["um_s"])),      .x(as.numeric(r["um_x_base"]))))),
+  collapse = "\n")
+
 results_md     <- res_tbl(d)
 discrepancy_md <- disc_tbl(d)
 
+base_note <- if (is.null(baselines))
+  "_(run `measure_baselines.R` to populate plain-baseline × multiples)_\n\n" else
+  "Cost columns show wall-clock and, in parentheses, the multiple of one **plain** (uninstrumented, no-covr) suite run.\n\n"
+
 out <- paste0(
-  "### Results (N per `tested_n`; CI shown when sampled)\n\n", results_md,
+  "# Mutation-testing benchmark — summary\n\n",
+  "Scores are the **comparable** basis (muttest = errors-as-kills, matched operators ",
+  "where available); times are wall-clock at N=500. muttest is testthat-only (n/a on ",
+  "non-testthat packages). See the detailed table for muttest's native scores and CIs.\n\n",
+  "## Headline — mutation score\n\n", scores_md,
+  "\n\n## Headline — cost vs. plain test-suite baseline\n\n", base_note, cost_md,
+  "\n\n### Results (N per `tested_n`; CI shown when sampled)\n\n", results_md,
   "\n\n### Mutants generated (full pool, before capping)\n\n", discrepancy_md, "\n")
+
+# machine-readable headline
+utils::write.csv(recs, file.path(dirname(csv), "summary_headline.csv"), row.names = FALSE)
 
 writeLines(out, file.path(dirname(csv), "SUMMARY.md"))
 cat(out)
