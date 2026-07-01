@@ -13,6 +13,8 @@ For each *tool × package* we report, capped to the **same mutant budget** so th
 numbers are comparable:
 
 - **performance**: end-to-end wall-clock (`wall_clock_s`) and `mutants_per_s`;
+  mutator and muttest can be repeated with `--runs N`, in which case
+  `wall_clock_s` is the bootstrap mean and `time_ci_low/high` give the 95% CI;
 - **effectiveness**: `killed`, `survived`, and `mutation_score` (= killed / tested);
 - **generation**: `generated_total`, the size of each tool's full mutant pool
   before capping (the basis for the discrepancy analysis).
@@ -133,16 +135,6 @@ spawns would erase the regex speed advantage.) It is validity-only, not TCE dedu
 `generated_total` reports the **valid** pool; `notes` carries the raw pool size and
 the count dropped as invalid.
 
-**Not coverage-guided (deliberately).** mutator's `coverage_guided` is only a
-test-*selection* speedup. It does not change verdicts; a mutant on an uncovered
-line is still counted as **SURVIVED**. So mutator's denominator is *all* mutable
-lines (minus nocov/.covrignore files). For universalmutator to match that
-population it must mutate **all** lines too (uncovered-line mutants then survive,
-as in mutator). Restricting universalmutator to covered lines would drop exactly
-those survivors and inflate its score; it also brings no speed benefit (covr
-overhead; the analyzed count is capped at N regardless). A `coverage_guided` option remains in
-the wrapper (`mutate --lines <covered>`) but is **off** for the benchmark.
-
 Residual caveat: universalmutator's universal rules still produce more
 trivial/redundant mutants than the AST tools (no TCE dedup), so its score is biased
 high relative to mutator/muttest even after validity filtering.
@@ -195,6 +187,7 @@ tail -f benchmarks/results/run_all.log
 
 bash benchmarks/run_all.sh --setup                       # also install the tools
 bash benchmarks/run_all.sh --packages prettyunits --budget 100   # quick subset
+bash benchmarks/run_all.sh --runs 5                     # repeat mutator/muttest timings
 bash benchmarks/run_all.sh --help                        # all options
 ```
 
@@ -222,6 +215,7 @@ Rscript benchmarks/run_benchmark.R --budget 30 --packages prettyunits
 # Options
 Rscript benchmarks/run_benchmark.R \
   --budget 500 \
+  --runs 5 \
   --packages prettyunits,stringr,forcats,scales,jsonlite \
   --tools mutator,muttest,muttest-matched,universalmutator \
   --out benchmarks/results/benchmark_results
@@ -233,7 +227,16 @@ Rscript benchmarks/summarize.R
 Results are written **incrementally** to `results/benchmark_results.csv` and
 `.json` (a long run is never lost). Columns: `tool, mode, package,
 generated_total, tested_n, killed, survived, timed_out, mutation_score,
-score_ci_low, score_ci_high, wall_clock_s, mutants_per_s, notes`.
+score_ci_low, score_ci_high, wall_clock_s, mutants_per_s, time_runs,
+time_ci_low, time_ci_high, time_samples, notes`.
+
+`--runs N` repeats the expensive timing measurement for **mutator** and
+**muttest** variants only; `universalmutator` remains single-run because it is
+usually the runtime bottleneck. The command-line flag takes precedence over the
+`BENCH_RUNS` environment variable, and both default to `1`. With `N > 1`, the
+driver keeps the same sampled mutant set per repeat, reports `wall_clock_s` as the
+bootstrap mean of the repeated wall-clock samples, and stores the bootstrap 95%
+interval in `time_ci_low/high`.
 
 **Self-contained per package.** For each `--packages` target the driver, as a first
 step:
