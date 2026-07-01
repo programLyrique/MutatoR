@@ -11,6 +11,7 @@
 #   --packages a,b,c   packages to benchmark        (default: 5 testthat targets)
 #   --tools t1,t2      tools to run                 (default: all four)
 #   --budget N         mutants/tool/package         (default: 500)
+#   --runs N           timing repeats for mutator/muttest (default: BENCH_RUNS or 1)
 #   --out PREFIX       output path prefix           (default: results/benchmark_results)
 #   --setup            run setup.sh first (installs muttest/universalmutator/comby)
 #   --skip-deps        skip per-package dependency auto-install
@@ -26,6 +27,7 @@ cd "$REPO_ROOT"
 PACKAGES="prettyunits,stringr,forcats,scales,jsonlite"
 TOOLS="mutator,muttest,muttest-matched,universalmutator"
 BUDGET=500
+RUNS="${BENCH_RUNS:-1}"
 OUT="benchmarks/results/benchmark_results"
 DO_SETUP=0
 SKIP_DEPS=""
@@ -36,6 +38,7 @@ while [ $# -gt 0 ]; do
     --packages)  PACKAGES="$2"; shift 2 ;;
     --tools)     TOOLS="$2"; shift 2 ;;
     --budget)    BUDGET="$2"; shift 2 ;;
+    --runs)      RUNS="$2"; shift 2 ;;
     --out)       OUT="$2"; shift 2 ;;
     --setup)     DO_SETUP=1; shift ;;
     --skip-deps) SKIP_DEPS="--skip-deps"; shift ;;
@@ -67,9 +70,9 @@ if [ "$DO_SETUP" = 1 ]; then
   bash benchmarks/setup.sh
 fi
 
-log "running benchmark: packages=$PACKAGES tools=$TOOLS budget=$BUDGET"
+log "running benchmark: packages=$PACKAGES tools=$TOOLS budget=$BUDGET runs=$RUNS"
 Rscript benchmarks/run_benchmark.R \
-  --packages "$PACKAGES" --tools "$TOOLS" --budget "$BUDGET" --out "$OUT" $SKIP_DEPS \
+  --packages "$PACKAGES" --tools "$TOOLS" --budget "$BUDGET" --runs "$RUNS" --out "$OUT" $SKIP_DEPS \
   || { echo "benchmark run failed" >&2; exit 1; }
 
 log "measuring plain (no-covr) baselines"

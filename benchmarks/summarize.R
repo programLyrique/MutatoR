@@ -17,6 +17,9 @@ csvs <- if (length(args)) args else
   Sys.glob(file.path(here, "results", "benchmark_results*.csv"))
 csv  <- csvs[1]                                   # SUMMARY.md written next to this
 d <- do.call(rbind, lapply(csvs, read.csv, stringsAsFactors = FALSE))
+for (nm in c("time_runs", "time_ci_low", "time_ci_high", "time_samples")) {
+  if (!nm %in% names(d)) d[[nm]] <- if (identical(nm, "time_samples")) "" else NA
+}
 d <- d[!duplicated(d[c("tool", "mode", "package")]), ]
 
 # Run provenance: prefer run_meta.txt written at benchmark time; else fall back to
@@ -45,6 +48,14 @@ fmt_score <- function(r) {
     s <- sprintf("%s (%.1f-%.1f)", s, r$score_ci_low, r$score_ci_high)
   s
 }
+fmt_time <- function(r) {
+  if (is.na(r$wall_clock_s)) return("-")
+  s <- sprintf("%.1f", r$wall_clock_s)
+  if (!is.na(r$time_ci_low)) {
+    s <- sprintf("%s (%.1f-%.1f)", s, r$time_ci_low, r$time_ci_high)
+  }
+  s
+}
 tool_lab <- function(tool, mode) {
   m <- ifelse(is.na(mode) | mode == "default", "full", mode)
   ifelse(tool == "universalmutator", paste0("universalmutator (", m, ")"),
@@ -54,7 +65,7 @@ tool_lab <- function(tool, mode) {
 # --- (a) results table ------------------------------------------------------
 res_tbl <- function(d) {
   lines <- c(
-    "| Package | Tool | Generated | Tested | Killed | Survived | Score % (95% CI) | Time (s) | Mut/s |",
+    "| Package | Tool | Generated | Tested | Killed | Survived | Score % (95% CI) | Time s (95% boot CI) | Mut/s |",
     "|---|---|--:|--:|--:|--:|--:|--:|--:|")
   for (pkg in unique(d$package)) {
     dp <- d[d$package == pkg, ]
@@ -64,7 +75,7 @@ res_tbl <- function(d) {
         pkg, tool_lab(r$tool, r$mode),
         format(r$generated_total, big.mark = ","), r$tested_n,
         r$killed, r$survived, fmt_score(r),
-        ifelse(is.na(r$wall_clock_s), "-", r$wall_clock_s),
+        fmt_time(r),
         ifelse(is.na(r$mutants_per_s), "-", r$mutants_per_s)))
     }
   }

@@ -61,7 +61,11 @@ metric_row <- function(tool, mode, package,
                        timed_out = NA_integer_,
                        mutation_score = NA_real_,
                        score_ci_low = NA_real_, score_ci_high = NA_real_,
-                       wall_clock_s = NA_real_, notes = "") {
+                       wall_clock_s = NA_real_,
+                       time_runs = NA_integer_,
+                       time_ci_low = NA_real_, time_ci_high = NA_real_,
+                       time_samples = "",
+                       notes = "") {
   mps <- if (!is.na(tested_n) && !is.na(wall_clock_s) && wall_clock_s > 0)
     tested_n / wall_clock_s else NA_real_
   data.frame(
@@ -76,6 +80,10 @@ metric_row <- function(tool, mode, package,
     score_ci_high = round(as.numeric(score_ci_high), 2),
     wall_clock_s = round(as.numeric(wall_clock_s), 1),
     mutants_per_s = round(mps, 3),
+    time_runs = as.integer(time_runs),
+    time_ci_low = round(as.numeric(time_ci_low), 1),
+    time_ci_high = round(as.numeric(time_ci_high), 1),
+    time_samples = time_samples,
     notes = notes,
     stringsAsFactors = FALSE
   )
@@ -91,6 +99,68 @@ wilson_ci <- function(killed, n, conf = 0.95, sampled = TRUE) {
   centre <- (p + z^2 / (2 * n)) / denom
   half <- (z * sqrt(p * (1 - p) / n + z^2 / (4 * n^2))) / denom
   c(max(0, centre - half), min(1, centre + half)) * 100
+}
+
+# Bootstrap confidence interval for the mean wall-clock time, in seconds.
+# Returns c(mean, low, high). A single timing has no meaningful interval.
+bootstrap_mean_ci <- function(x, conf = 0.95, n_boot = 2000L, seed = SEED + 1L) {
+  x <- as.numeric(x)
+  x <- x[is.finite(x)]
+  if (!length(x)) return(c(mean = NA_real_, low = NA_real_, high = NA_real_))
+  mn <- mean(x)
+  if (length(x) < 2L) return(c(mean = mn, low = NA_real_, high = NA_real_))
+  old_seed <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+    get(".Random.seed", envir = .GlobalEnv)
+  } else {
+    NULL
+  }
+  on.exit({
+    if (is.null(old_seed)) {
+      if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+        rm(".Random.seed", envir = .GlobalEnv)
+      }
+    } else {
+      assign(".Random.seed", old_seed, envir = .GlobalEnv)
+    }
+  }, add = TRUE)
+  set.seed(seed)
+  boots <- replicate(as.integer(n_boot), mean(sample(x, length(x), replace = TRUE)))
+  alpha <- (1 - conf) / 2
+  c(mean = mn,
+    low = unname(stats::quantile(boots, alpha, names = FALSE)),
+    high = unname(stats::quantile(boots, 1 - alpha, names = FALSE)))
+}
+
+# Collapse repeated benchmark rows into the standard one-row-per-tool/mode/package
+# shape. Score/count fields come from the first run; wall-clock is replaced by
+# the bootstrap mean, with explicit CI/sample columns.
+aggregate_repeated_rows <- function(run_rows, conf = 0.95, n_boot = 2000L) {
+  rows <- do.call(rbind, run_rows)
+  keys <- unique(rows[c("tool", "mode", "package")])
+  out <- lapply(seq_len(nrow(keys)), function(i) {
+    k <- keys[i, ]
+    idx <- rows$tool == k$tool & rows$package == k$package &
+      ((is.na(rows$mode) & is.na(k$mode)) | (!is.na(rows$mode) & !is.na(k$mode) & rows$mode == k$mode))
+    g <- rows[idx, , drop = FALSE]
+    base <- g[1, , drop = FALSE]
+    times <- as.numeric(g$wall_clock_s)
+    times <- times[is.finite(times)]
+    if (length(times)) {
+      ci <- bootstrap_mean_ci(times, conf = conf, n_boot = n_boot)
+      base$wall_clock_s <- round(ci[["mean"]], 1)
+      base$mutants_per_s <- if (!is.na(base$tested_n) && ci[["mean"]] > 0) {
+        round(base$tested_n / ci[["mean"]], 3)
+      } else {
+        NA_real_
+      }
+      base$time_runs <- length(times)
+      base$time_ci_low <- round(ci[["low"]], 1)
+      base$time_ci_high <- round(ci[["high"]], 1)
+      base$time_samples <- paste(sprintf("%.1f", times), collapse = ";")
+    }
+    base
+  })
+  do.call(rbind, out)
 }
 
 # ---------------------------------------------------------------------------

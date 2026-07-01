@@ -6,12 +6,12 @@
 # budget and append a standard metric row to results/benchmark_results.{csv,json}.
 #
 # Usage:
-#   Rscript benchmarks/run_benchmark.R [--budget N] [--packages a,b,c]
+#   Rscript benchmarks/run_benchmark.R [--budget N] [--runs N] [--packages a,b,c]
 #                                      [--tools mutator,muttest,universalmutator]
 #                                      [--out results/benchmark_results]
 #
-# Defaults: budget = 500, all 5 target packages, all three tools (universalmutator
-# in comby mode only). Run from the repo root.
+# Defaults: budget = 500, runs = 1, all 5 target packages, all four tool modes
+# (universalmutator in regex mode). Run from the repo root.
 
 # --- locate ourselves & load shared code -----------------------------------
 args_all <- commandArgs(trailingOnly = FALSE)
@@ -32,11 +32,13 @@ get_opt <- function(flag, default) {
   if (length(i) && i < length(argv)) argv[i + 1] else default
 }
 budget   <- as.integer(get_opt("--budget", "500"))
+runs     <- as.integer(get_opt("--runs", Sys.getenv("BENCH_RUNS", unset = "1")))
 packages <- strsplit(get_opt("--packages", paste(TARGET_PKGS, collapse = ",")), ",")[[1]]
 tools    <- strsplit(get_opt("--tools",
               "mutator,muttest,muttest-matched,universalmutator"), ",")[[1]]
 out_base <- get_opt("--out", file.path(RESULTS_DIR, "benchmark_results"))
 skip_deps <- "--skip-deps" %in% argv   # by default, auto-install each target's deps
+if (is.na(runs) || runs < 1L) stop("--runs / BENCH_RUNS must be a positive integer")
 
 # --- load mutator (dev mode) ------------------------------------------------
 suppressWarnings(suppressMessages(pkgload::load_all(REPO_ROOT, quiet = TRUE)))
@@ -52,7 +54,8 @@ suppressWarnings(suppressMessages(pkgload::load_all(REPO_ROOT, quiet = TRUE)))
 dir.create(dirname(out_base), recursive = TRUE, showWarnings = FALSE)
 writeLines(c(
   sprintf("run_date=%s", format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")),
-  sprintf("mutator_commit=%s%s", .commit %||% "unknown", if (isTRUE(.dirty)) "-dirty" else "")),
+  sprintf("mutator_commit=%s%s", .commit %||% "unknown", if (isTRUE(.dirty)) "-dirty" else ""),
+  sprintf("timing_runs=%d", runs)),
   file.path(dirname(out_base), "run_meta.txt"))
 
 runners <- list(
@@ -72,8 +75,8 @@ runners <- list(
     bench_universalmutator(pkg_dir, budget, mode = "regex", coverage_guided = FALSE)
 )
 
-cat(sprintf("Benchmark: budget=%d | packages=%s | tools=%s\n\n",
-            budget, paste(packages, collapse = ","), paste(tools, collapse = ",")))
+cat(sprintf("Benchmark: budget=%d | timing runs=%d for mutator/muttest | packages=%s | tools=%s\n\n",
+            budget, runs, paste(packages, collapse = ","), paste(tools, collapse = ",")))
 
 rows <- list()
 for (pkg in packages) {
@@ -97,17 +100,36 @@ for (pkg in packages) {
       cat(sprintf("   [skip] %-13s (muttest is testthat-only; %s uses %s)\n",
                   tool, pkg, framework)); next
     }
+    tool_runs <- if (runs > 1L && (identical(tool, "mutator") || grepl("^muttest", tool))) runs else 1L
     cat(sprintf("   -> %-16s ", tool)); flush.console()
-    row <- tryCatch(runners[[tool]](pkg_dir, budget),
-                    error = function(e)
-                      metric_row(tool, NA, pkg, notes = paste("ERROR:", conditionMessage(e))))
-    if (!is.na(green) && !green) row$notes <- trimws(paste(row$notes, "[baseline not green]"))
+    run_rows <- vector("list", tool_runs)
+    for (run_idx in seq_len(tool_runs)) {
+      if (tool_runs > 1L) {
+        cat(sprintf("run %d/%d ", run_idx, tool_runs)); flush.console()
+      }
+      row_i <- tryCatch(runners[[tool]](pkg_dir, budget),
+                        error = function(e)
+                          metric_row(tool, NA, pkg, notes = paste("ERROR:", conditionMessage(e))))
+      if (!is.na(green) && !green) row_i$notes <- trimws(paste(row_i$notes, "[baseline not green]"))
+      run_rows[[run_idx]] <- row_i
+    }
+    row <- if (tool_runs > 1L) aggregate_repeated_rows(run_rows) else run_rows[[1]]
+    if (tool_runs > 1L) {
+      row$notes <- trimws(paste(row$notes, sprintf("[timing runs=%d; wall_clock_s=bootstrap mean]", tool_runs)))
+    }
     # A runner may return multiple rows (e.g. muttest: native + errors-as-kills).
     cat("\n")
-    for (j in seq_len(nrow(row)))
-      cat(sprintf("      [%s] score=%s%% killed=%s/%s gen=%s time=%ss\n",
+    for (j in seq_len(nrow(row))) {
+      time_ci <- if (!is.na(row$time_ci_low[j])) {
+        sprintf(" (95%% boot %.1f-%.1f)", row$time_ci_low[j], row$time_ci_high[j])
+      } else {
+        ""
+      }
+      time_label <- if (is.na(row$wall_clock_s[j])) "-" else paste0(row$wall_clock_s[j], "s")
+      cat(sprintf("      [%s] score=%s%% killed=%s/%s gen=%s time=%s%s\n",
                   row$mode[j], row$mutation_score[j], row$killed[j], row$tested_n[j],
-                  row$generated_total[j], row$wall_clock_s[j]))
+                  row$generated_total[j], time_label, time_ci))
+    }
     rows[[length(rows) + 1]] <- row
     # Write incrementally so a long run is never lost.
     write_results(do.call(rbind, rows),
