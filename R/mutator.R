@@ -1510,6 +1510,8 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
           # isFullLog = TRUE, see the surfacing branch below.)
           if (fail_fast) {
             Sys.setenv(TESTTHAT_MAX_FAILS = "1")
+          } else {
+            Sys.unsetenv("TESTTHAT_MAX_FAILS")
           }
           setwd(pkg_path)
           suppressMessages(pkgload::load_all(".", quiet = TRUE))

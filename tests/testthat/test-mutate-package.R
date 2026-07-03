@@ -489,6 +489,15 @@ test_that("fail_fast stops the suite at the first failing test but keeps the ver
 
   # fail_fast = FALSE: every mutant runs the full suite, so each one also reaches
   # the sentinel file -> strictly more appends than the baseline-only case above.
+  old_max_fails <- Sys.getenv("TESTTHAT_MAX_FAILS", unset = NA_character_)
+  on.exit({
+    if (is.na(old_max_fails)) {
+      Sys.unsetenv("TESTTHAT_MAX_FAILS")
+    } else {
+      Sys.setenv(TESTTHAT_MAX_FAILS = old_max_fails)
+    }
+  }, add = TRUE)
+  Sys.setenv(TESTTHAT_MAX_FAILS = "1")
   unlink(sentinel)
   res_full <- suppressMessages(
     mutate_package(pkg_dir, cores = 1, max_line_deletions = 0, fail_fast = FALSE)
