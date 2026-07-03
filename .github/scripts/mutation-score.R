@@ -36,6 +36,8 @@ result <- tryCatch(
     cores = cores,
     isolate = TRUE,
     mutation_dir = mutation_dir,
+    isFullLog = TRUE,
+    fail_fast = FALSE,
     max_show = 25L
   ),
   error = function(err) {
