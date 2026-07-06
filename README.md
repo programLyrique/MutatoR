@@ -13,13 +13,47 @@
 
 mutator is an automated mutation testing tool for the R language. It applies mutation testing principles to help developers improve test suite quality by introducing small, systematic changes (mutations) to source code and verifying if tests can detect these changes.
 
+For instance, imagine you have the following function `f` in your package:
+
+```r
+f <- function(x) {
+  if (x > 0) {
+    return(x + 1)
+  } else {
+    return(x - 1)
+  }
+}
+```
+
+`mutator` will generate several mutants, including:
+
+```r
+f <- function(x) {
+  if (x < 0) { # Mutated comparison operator
+    return(x + 1)
+  } else {
+    return(x - 1)
+  }
+}
+```
+
+In this mutant, `>` has been replaced with `<`.
+
+If your test suite does not catch this change, it indicates that your tests may not be comprehensive enough.
+
+`mutator` will compute how many mutants _survives_, i.e. the test suite does not fail for the mutant, and how many mutants are _killed_, i.e. the test suite fails for the mutant. The ratio of killed mutants to total mutants is called the **mutation score** and is a measure of test suite effectiveness.
+
+
 ## Features
 
 - **Comprehensive Mutation Testing**: Applies various mutation operators to R source code
 - **AST-Based Mutation**: Uses Abstract Syntax Tree analysis for intelligent code mutations
 - **Parallel Test Execution**: Runs tests in parallel for improved performance
 - **Coverage-guided Test Selection**: Runs only the tests that cover mutated lines, also for improved performance
-- **Equivalent Mutant Detection**: Uses AI to identify mutants that are functionally equivalent to the original code
+- **Configurable Test Harness**: Supports both `testthat` and non-`testthat` test layouts
+- **Timeout Management**: Automatically calibrates timeouts for mutant test runs to prevent hangs
+- **Annotations and Exclusions**: Allows developers to exclude specific files or code sections from mutation testing
+- **Equivalent Mutant Detection**: Identify mutants that are functionally equivalent to the original code (currently, using LLMs)
 - **Detailed Reporting**: Provides mutation scores and analysis of test suite effectiveness
 
 ## Installation
@@ -59,6 +93,12 @@ result <- mutate_package("path/to/your/package", timeout_seconds = 60)
 result <- mutate_package("path/to/your/package", mutation_dir = tempdir())
 ```
 
+Mutant outcomes are reported as:
+
+- `SURVIVED`: tests passed for the mutant
+- `KILLED`: tests failed (or execution error)
+- `HANG`: mutant exceeded timeout
+
 See the [pkgdown reference](https://prl-prg.github.io/mutator/reference/) for
 the full argument and return-value documentation.
 
@@ -69,15 +109,7 @@ mutator selects a package test strategy automatically:
 - If `tests/testthat/` exists, mutator loads the mutant in-process with `pkgload::load_all()` and mirrors the package's own `tests/testthat.R` harness by forwarding extractable arguments (notably any `filter`) from `testthat::test_check()` to `testthat::test_dir()`, without paying for an install per mutant.
 - Otherwise, if `tests/` exists, mutator falls back to `tools::testInstalledPackage(..., types = "tests")` after installing each mutant with `--install-tests`.
 
-The fallback path supports non-`testthat` layouts (for example `tinytest`-driven packages that run through `tests/` scripts). To avoid recompiling C/C++ on every mutant, mutator installs the unmutated package, compiling its shared objects, **once** into a template library, then installs each mutant with `--no-libs` (R code only) and restores the template's prebuilt shared objects before running its tests. This is safe because mutator does not mutate compiled code, so the shared object is identical for every mutant; it also means concurrent mutant installs no longer write into a shared `src/` (see [Parallel execution and isolation](https://prl-prg.github.io/mutator/articles/configuration.html#parallel-execution-and-isolation-isolate) in the Configuration article).
-
-Each mutant test run uses a timeout. By default, mutator calibrates it from the baseline suite runtime under the current parallelism, with a small floor. You can override this by setting `timeout_seconds` explicitly.
-
-Mutant outcomes are reported as:
-
-- `SURVIVED`: tests passed for the mutant
-- `KILLED`: tests failed (or execution error)
-- `HANG`: mutant exceeded timeout
+The fallback path supports non-`testthat` layouts (for example `tinytest`-driven packages that run through `tests/` scripts). 
 
 ## Configuration
 
@@ -117,7 +149,6 @@ mutator currently generates these mutation families:
 | Returns | Replaces non-constant direct `return()` values with `NULL`, for example `return(x)` → `return(NULL)` |
 | Deletions | Deletes statements inside `{ ... }` blocks and, as a fallback, valid source lines |
 
-Direct literal return values are not rewritten by the return-to-`NULL` mutation; for example, `return(1)` is left alone by that mutation.
 
 ## Dependencies
 
