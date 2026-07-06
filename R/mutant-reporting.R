@@ -31,7 +31,7 @@ format_surviving_mutants <- function(survivors, pkg_dir = NULL, color = NULL, co
       break
     }
     shown <- shown + 1L
-    info <- parse_mutation_info(m$mutation_info, m$src)
+    info <- mutation_record_info(m)
     file <- disp_path(info$file)
     line <- info$start_line
     # When the engine could only locate the mutant to an enclosing expression
@@ -110,4 +110,3 @@ format_surviving_mutants <- function(survivors, pkg_dir = NULL, color = NULL, co
   }
   out
 }
-

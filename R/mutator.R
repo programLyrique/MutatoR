@@ -1548,6 +1548,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     package_mutants[[mutant_id]] <- list(
       path = pkg_copy_dir,
       mutation_info = mutation_info,
+      mutation_loc = mutants[[mutant_id]]$loc,
       status = status,
       src = mutants[[mutant_id]]$src,
       mutant_file = mutants[[mutant_id]]$mutant_file

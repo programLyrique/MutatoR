@@ -59,6 +59,9 @@ test_check(\"%s\")", pkg_name, pkg_name), file.path(pkg_dir, "tests", "testthat.
   expect_true("package_mutants" %in% names(result))
   expect_true("test_results" %in% names(result))
   expect_true(length(result$test_results) > 0)
+  first_mutant <- result$package_mutants[[1]]
+  expect_true(is.list(first_mutant$mutation_loc))
+  expect_true(all(c("file_path", "start_line", "end_line", "details") %in% names(first_mutant$mutation_loc)))
 })
 
 test_that("mutate_package links unchanged package content", {

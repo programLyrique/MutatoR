@@ -1,34 +1,52 @@
-# Parse a mutant's `mutation_info` string ("File: <path>\nRange: sl:sc-el:ec\n
-# Details: <text>") into its components. Missing pieces come back as NA; when
-# `src` is supplied it overrides the File entry.
-parse_mutation_info <- function(mutation_info, src = NULL) {
-  out <- list(
-    file = if (is.null(src)) NA_character_ else src,
-    start_line = NA_integer_, start_col = NA_integer_,
-    end_line = NA_integer_, end_col = NA_integer_, details = NA_character_
-  )
-  if (is.null(mutation_info) || length(mutation_info) != 1L ||
-    is.na(mutation_info) || !nzchar(mutation_info)) {
-    return(out)
-  }
-  lines <- strsplit(mutation_info, "\n", fixed = TRUE)[[1]]
-  if (is.null(src)) {
-    fl <- grep("^File: ", lines, value = TRUE)
-    if (length(fl)) out$file <- sub("^File: ", "", fl[1])
-  }
-  rl <- grep("^Range: ", lines, value = TRUE)
-  if (length(rl)) {
-    m <- regmatches(rl[1], regexec("Range: ([0-9]+):([0-9]+)-([0-9]+):([0-9]+)", rl[1]))[[1]]
-    if (length(m) == 5L) {
-      out$start_line <- as.integer(m[2])
-      out$start_col <- as.integer(m[3])
-      out$end_line <- as.integer(m[4])
-      out$end_col <- as.integer(m[5])
+mutation_detail_text <- function(raw_info = NULL) {
+  if (is.list(raw_info)) {
+    if (!is.null(raw_info$mutation_type) &&
+      length(raw_info$mutation_type) > 0 &&
+      identical(as.character(raw_info$mutation_type[1]), "line_deletion") &&
+      !is.null(raw_info$deleted_line) &&
+      length(raw_info$deleted_line) > 0) {
+      return(sprintf("deleted line %d", as.integer(raw_info$deleted_line[1])))
     }
+
+    original_symbol <- if (!is.null(raw_info$original_symbol) && length(raw_info$original_symbol) > 0) raw_info$original_symbol[1] else NA_character_
+    new_symbol <- if (!is.null(raw_info$new_symbol) && length(raw_info$new_symbol) > 0) raw_info$new_symbol[1] else NA_character_
+
+    if (!is.na(original_symbol) || !is.na(new_symbol)) {
+      new_label <- if (is.na(new_symbol)) "<deleted>" else new_symbol
+      old_label <- if (is.na(original_symbol)) "<unknown>" else original_symbol
+      return(sprintf("'%s' -> '%s'", old_label, new_label))
+    }
+    return(NA_character_)
   }
-  dl <- grep("^Details: ", lines, value = TRUE)
-  if (length(dl)) out$details <- sub("^Details: ", "", dl[1])
-  out
+
+  if (!is.null(raw_info) && length(raw_info) == 1L && !is.na(raw_info) && nzchar(raw_info)) {
+    return(as.character(raw_info))
+  }
+  NA_character_
+}
+
+mutation_record_info <- function(m) {
+  first_present <- function(...) {
+    values <- list(...)
+    for (value in values) {
+      if (!is.null(value) && length(value) > 0) {
+        return(value)
+      }
+    }
+    NULL
+  }
+  loc <- first_present(m$mutation_loc, m$loc)
+  if (!is.list(loc)) {
+    loc <- list()
+  }
+  list(
+    file = first_present(loc$file_path, m$src, NA_character_),
+    start_line = first_present(loc$start_line, NA_integer_),
+    start_col = first_present(loc$start_col, NA_integer_),
+    end_line = first_present(loc$end_line, NA_integer_),
+    end_col = first_present(loc$end_col, NA_integer_),
+    details = first_present(loc$details, NA_character_)
+  )
 }
 
 # Display a source path relative to pkg_dir (e.g. "R/calc.R") so it is locatable
@@ -60,7 +78,7 @@ mutant_display_path <- function(path, pkg_dir = NULL) {
 # (its on-disk filename, e.g. "rounding.R_rounding.R_096.R", where 096 is a
 # sequential generation counter, NOT a source line) is never shown here.
 mutant_location_label <- function(m, pkg_dir = NULL) {
-  info <- parse_mutation_info(m$mutation_info, m$src)
+  info <- mutation_record_info(m)
   file <- mutant_display_path(info$file, pkg_dir)
   line <- info$start_line
   end_line <- if (!is.na(info$end_line)) max(info$end_line, line) else line
@@ -103,26 +121,9 @@ format_mutation_info <- function(src_file, raw_info = NULL) {
     ))
   }
 
-  if (is.list(raw_info)) {
-    if (!is.null(raw_info$mutation_type) &&
-      length(raw_info$mutation_type) > 0 &&
-      identical(as.character(raw_info$mutation_type[1]), "line_deletion") &&
-      !is.null(raw_info$deleted_line) &&
-      length(raw_info$deleted_line) > 0) {
-      parts <- c(parts, sprintf("Details: deleted line %d", as.integer(raw_info$deleted_line[1])))
-      return(paste(parts, collapse = "\n"))
-    }
-
-    original_symbol <- if (!is.null(raw_info$original_symbol) && length(raw_info$original_symbol) > 0) raw_info$original_symbol[1] else NA_character_
-    new_symbol <- if (!is.null(raw_info$new_symbol) && length(raw_info$new_symbol) > 0) raw_info$new_symbol[1] else NA_character_
-
-    if (!is.na(original_symbol) || !is.na(new_symbol)) {
-      new_label <- if (is.na(new_symbol)) "<deleted>" else new_symbol
-      old_label <- if (is.na(original_symbol)) "<unknown>" else original_symbol
-      parts <- c(parts, sprintf("Details: '%s' -> '%s'", old_label, new_label))
-    }
-  } else if (!is.null(raw_info) && nzchar(raw_info)) {
-    parts <- c(parts, sprintf("Details: %s", raw_info))
+  details <- mutation_detail_text(raw_info)
+  if (!is.na(details)) {
+    parts <- c(parts, sprintf("Details: %s", details))
   }
 
   paste(parts, collapse = "\n")
@@ -136,7 +137,9 @@ format_mutation_info <- function(src_file, raw_info = NULL) {
 mutation_location <- function(src_file, raw_info = NULL) {
   file_path <- normalizePath(src_file, mustWork = FALSE)
   start_line <- NA_integer_
+  start_col <- NA_integer_
   end_line <- NA_integer_
+  end_col <- NA_integer_
   if (is.list(raw_info)) {
     if (!is.null(raw_info$file_path) && length(raw_info$file_path) > 0 &&
       !is.na(raw_info$file_path[1]) && nzchar(raw_info$file_path[1])) {
@@ -145,10 +148,20 @@ mutation_location <- function(src_file, raw_info = NULL) {
     if (!is.null(raw_info$start_line) && length(raw_info$start_line) > 0) {
       start_line <- as.integer(raw_info$start_line[1])
     }
+    if (!is.null(raw_info$start_col) && length(raw_info$start_col) > 0) {
+      start_col <- as.integer(raw_info$start_col[1])
+    }
     if (!is.null(raw_info$end_line) && length(raw_info$end_line) > 0) {
       end_line <- as.integer(raw_info$end_line[1])
     }
+    if (!is.null(raw_info$end_col) && length(raw_info$end_col) > 0) {
+      end_col <- as.integer(raw_info$end_col[1])
+    }
   }
-  list(file_path = file_path, start_line = start_line, end_line = end_line)
+  list(
+    file_path = file_path,
+    start_line = start_line, start_col = start_col,
+    end_line = end_line, end_col = end_col,
+    details = mutation_detail_text(raw_info)
+  )
 }
-
