@@ -298,8 +298,11 @@ mutate_file <- function(src_file, out_dir = "mutations", max_mutants = NULL,
 #'   a line no test covers cannot be killed, so it is reported `SURVIVED` without
 #'   running any test. Selection is at the test-*file* level (testthat filters by
 #'   file); under the assumption that the suite deterministically exercises the code,
-#'   it should not change a mutant's verdict, only which tests run. Requires
-#'   the `testthat` strategy (errors otherwise). Defaults to `FALSE`.
+#'   it should not change a mutant's verdict, only which tests run. Defaults to
+#'   `TRUE`. Coverage guidance is only available under the `testthat` strategy;
+#'   when the resolved strategy is the installed-tests fallback, mutator emits a
+#'   warning and runs the full suite for every mutant. Pass `FALSE` to disable
+#'   it (and silence that warning).
 #' @param coverage_backend How `coverage_guided` attributes coverage to tests
 #'   (ignored when `coverage_guided = FALSE`). `"record_tests"` (the default) uses
 #'   covr's `record_tests` in a single run; it relies only on covr's public output
@@ -371,7 +374,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
                            fail_fast = TRUE, isolate = FALSE,
                            exclude_files = NULL,
                            strategy = c("auto", "testthat", "installed"),
-                           coverage_guided = FALSE,
+                           coverage_guided = TRUE,
                            coverage_backend = c("record_tests", "per_file"),
                            target_margin = NULL, confidence = 0.95,
                            max_show = 50L) {
@@ -821,14 +824,15 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
   }
 
   if (isTRUE(coverage_guided) && !identical(test_strategy, "testthat")) {
-    stop(sprintf(
+    warning(sprintf(
       paste0(
-        "`coverage_guided = TRUE` requires the testthat strategy, but the ",
-        "resolved strategy is '%s'. Use strategy = \"testthat\" (the package ",
-        "needs a 'tests/testthat' directory)."
+        "coverage-guided optimisation requires the testthat strategy, but the ",
+        "resolved strategy is '%s'; running the full test suite for every ",
+        "mutant instead. Pass coverage_guided = FALSE to silence this warning."
       ),
       test_strategy
     ), call. = FALSE)
+    coverage_guided <- FALSE
   }
 
   run_tests <- function(pkg_path, test_filter = NULL) {
@@ -1130,9 +1134,17 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     }
     for (id in mutant_ids) {
       loc <- mutants[[id]]$loc
-      sel <- select_test_files(
-        cov_map, basename(loc$file_path), loc$start_line, loc$end_line
-      )
+      file_path <- loc$file_path
+      sel <- if (is.null(file_path) || length(file_path) != 1L ||
+        is.na(file_path) || !nzchar(file_path)) {
+        # A mutant whose source location cannot be resolved cannot be attributed
+        # to covering tests; run the whole suite for it rather than guessing.
+        "RUN_ALL"
+      } else {
+        select_test_files(
+          cov_map, basename(file_path), loc$start_line, loc$end_line
+        )
+      }
       if (identical(sel, "UNCOVERED")) {
         mutant_test_plan[[id]] <- list(action = "survived")
       } else if (identical(sel, "RUN_ALL")) {

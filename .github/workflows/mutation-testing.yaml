@@ -1,0 +1,156 @@
+# Reusable workflow: run mutator mutation testing on an R package.
+#
+# Call it from your own repo with a small caller workflow, e.g.:
+#
+#   jobs:
+#     mutation:
+#       permissions:
+#         contents: write        # only needed when deploy-badge: true
+#       uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v1
+#       with:
+#         target-margin: "0.10"
+#
+# See the "Continuous integration" section of the mutator README for details.
+name: mutation-testing
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner to execute on.
+        type: string
+        default: ubuntu-latest
+      r-version:
+        description: R version passed to r-lib/actions/setup-r.
+        type: string
+        default: release
+      mutator-spec:
+        description: pak spec used to install mutator (e.g. "any::mutator" for CRAN).
+        type: string
+        default: github::PRL-PRG/mutator
+      install-imputesrcref:
+        description: Install the optional imputesrcref package to refine mutant locations.
+        type: boolean
+        default: true
+      imputesrcref-spec:
+        description: pak spec used to install imputesrcref.
+        type: string
+        default: github::PRL-PRG/imputesrcref@fix-r-4-6-public-c-api
+      extra-packages:
+        description: Additional pak specs to install (comma separated).
+        type: string
+        default: ""
+      target-margin:
+        description: Desired +/- half-width of the mutation-score CI as a proportion (e.g. "0.10"). Empty tests every mutant.
+        type: string
+        default: "0.10"
+      max-mutants:
+        description: Cap on the number of sampled mutants. Takes precedence over target-margin. Empty for no cap.
+        type: string
+        default: ""
+      cores:
+        description: Parallel workers. "0" auto-detects.
+        type: string
+        default: "0"
+      timeout-seconds:
+        description: Per-mutant timeout in seconds. Empty derives it from the baseline runtime.
+        type: string
+        default: ""
+      isolate:
+        description: Deep-copy src/ and tests/ into each mutant (use for non-hermetic test suites).
+        type: boolean
+        default: true
+      coverage-guided:
+        description: Run only the tests that cover each mutated line. Automatically disabled (with a warning) for installed-tests packages.
+        type: boolean
+        default: true
+      exclude-files:
+        description: Glob patterns (comma/space separated) of R/ files to skip.
+        type: string
+        default: ""
+      fail-under:
+        description: Fail the job if the mutation score (percent) is below this number. Empty never fails.
+        type: string
+        default: ""
+      badge-label:
+        description: Label shown on the shields.io badge.
+        type: string
+        default: mutation score
+      deploy-badge:
+        description: Publish the badge JSON to a branch via GitHub Pages (requires contents:write on the caller job).
+        type: boolean
+        default: false
+      badge-branch:
+        description: Branch the badge JSON is deployed to when deploy-badge is true.
+        type: string
+        default: gh-pages
+      artifact-name:
+        description: Name of the uploaded results artifact.
+        type: string
+        default: mutation-results
+
+jobs:
+  mutation-testing:
+    runs-on: ${{ inputs.runs-on }}
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      R_KEEP_PKG_SOURCE: yes
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: ${{ inputs.r-version }}
+          use-public-rspm: true
+
+      - name: Assemble package list
+        id: pkgs
+        shell: bash
+        run: |
+          pkgs="any::pkgbuild, ${{ inputs.mutator-spec }}"
+          if [ "${{ inputs.install-imputesrcref }}" = "true" ]; then
+            pkgs="$pkgs, ${{ inputs.imputesrcref-spec }}"
+          fi
+          if [ -n "${{ inputs.extra-packages }}" ]; then
+            pkgs="$pkgs, ${{ inputs.extra-packages }}"
+          fi
+          pkgs="$pkgs, local::."
+          echo "list=$pkgs" >> "$GITHUB_OUTPUT"
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: ${{ steps.pkgs.outputs.list }}
+          needs: check
+          dependencies: 'c("Depends", "Imports", "LinkingTo", "Suggests")'
+          install-pandoc: false
+
+      - name: Run mutation testing
+        shell: Rscript {0}
+        env:
+          MUTATOR_PKG_DIR: "."
+          MUTATOR_OUT_DIR: mutation-results
+          MUTATOR_TARGET_MARGIN: ${{ inputs.target-margin }}
+          MUTATOR_MAX_MUTANTS: ${{ inputs.max-mutants }}
+          MUTATOR_CORES: ${{ inputs.cores }}
+          MUTATOR_TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
+          MUTATOR_ISOLATE: ${{ inputs.isolate }}
+          MUTATOR_COVERAGE_GUIDED: ${{ inputs.coverage-guided }}
+          MUTATOR_EXCLUDE_FILES: ${{ inputs.exclude-files }}
+          MUTATOR_FAIL_UNDER: ${{ inputs.fail-under }}
+          MUTATOR_BADGE_LABEL: ${{ inputs.badge-label }}
+        run: source(system.file("ci", "mutation-score.R", package = "mutator"))
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: mutation-results
+
+      - name: Deploy badge
+        if: ${{ always() && inputs.deploy-badge && github.event_name != 'pull_request' }}
+        uses: JamesIves/github-pages-deploy-action@d92aa235d04922e8f08b40ce78cc5442fcfbfa2f # v4.8.0
+        with:
+          clean: false
+          branch: ${{ inputs.badge-branch }}
+          folder: mutation-results

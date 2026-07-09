@@ -19,7 +19,7 @@ mutate_package(
   isolate = FALSE,
   exclude_files = NULL,
   strategy = c("auto", "testthat", "installed"),
-  coverage_guided = FALSE,
+  coverage_guided = TRUE,
   coverage_backend = c("record_tests", "per_file"),
   target_margin = NULL,
   confidence = 0.95,
@@ -110,8 +110,11 @@ whole suite. Coverage is measured once on the unmutated package with
 a line no test covers cannot be killed, so it is reported \code{SURVIVED} without
 running any test. Selection is at the test-\emph{file} level (testthat filters by
 file); under the assumption that the suite deterministically exercises the code,
-it should not change a mutant's verdict, only which tests run. Requires
-the \code{testthat} strategy (errors otherwise). Defaults to \code{FALSE}.}
+it should not change a mutant's verdict, only which tests run. Defaults to
+\code{TRUE}. Coverage guidance is only available under the \code{testthat} strategy;
+when the resolved strategy is the installed-tests fallback, mutator emits a
+warning and runs the full suite for every mutant. Pass \code{FALSE} to disable
+it (and silence that warning).}
 
 \item{coverage_backend}{How \code{coverage_guided} attributes coverage to tests
 (ignored when \code{coverage_guided = FALSE}). \code{"record_tests"} (the default) uses

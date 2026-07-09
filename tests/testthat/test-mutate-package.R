@@ -306,12 +306,49 @@ License: MIT", pkg_name), file.path(pkg_dir, "DESCRIPTION"))
   writeLines("stopifnot(testCompiledFallback::add2(2, 3) == 5)",
     file.path(pkg_dir, "tests", "test-add.R"))
 
-  result <- mutate_package(pkg_dir, cores = 2, strategy = "installed")
+  result <- mutate_package(pkg_dir, cores = 2, strategy = "installed",
+    coverage_guided = FALSE)
 
   expect_true(is.list(result))
   expect_true(length(result$test_results) > 0)
   # Baseline succeeded (mutate_package would have errored otherwise) and every
   # mutant produced a verdict, i.e. installs with the restored .so worked.
+  expect_true(all(unlist(result$test_results) %in% c("KILLED", "SURVIVED", "HANG")))
+})
+
+test_that("coverage_guided warns and falls back under the installed-tests strategy", {
+  skip_if_not_installed("pkgload")
+  skip_if_not_installed("furrr")
+
+  temp_dir <- tempfile()
+  dir.create(temp_dir)
+  on.exit(unlink(temp_dir, recursive = TRUE), add = TRUE)
+
+  pkg_name <- "testCovFallback"
+  pkg_dir <- file.path(temp_dir, pkg_name)
+  dir.create(file.path(pkg_dir, "R"), recursive = TRUE)
+  dir.create(file.path(pkg_dir, "tests"), recursive = TRUE)
+
+  writeLines(sprintf("Package: %s
+Version: 0.1.0
+Title: Installed-tests package without testthat
+Description: A package whose tests run through tests/ scripts.
+Author: Test Author
+License: MIT", pkg_name), file.path(pkg_dir, "DESCRIPTION"))
+  writeLines("export(add2)", file.path(pkg_dir, "NAMESPACE"))
+  writeLines("add2 <- function(x, y) x + y", file.path(pkg_dir, "R", "add.R"))
+  # tests/ script layout (no tests/testthat), so the installed-tests strategy
+  # is selected and coverage guidance cannot apply.
+  writeLines("stopifnot(testCovFallback::add2(2, 3) == 5)",
+    file.path(pkg_dir, "tests", "test-add.R"))
+
+  # coverage_guided defaults to TRUE, but the resolved strategy is installed
+  # tests: mutator should warn and run the full suite rather than error.
+  expect_warning(
+    result <- mutate_package(pkg_dir, cores = 1, strategy = "installed"),
+    "coverage-guided optimisation requires the testthat strategy"
+  )
+  expect_true(is.list(result))
   expect_true(all(unlist(result$test_results) %in% c("KILLED", "SURVIVED", "HANG")))
 })
 
@@ -486,7 +523,8 @@ test_that("fail_fast stops the suite at the first failing test but keeps the ver
   # sentinel file. The baseline (which passes) still runs the whole suite.
   unlink(sentinel)
   res_ff <- suppressMessages(
-    mutate_package(pkg_dir, cores = 1, max_line_deletions = 0, fail_fast = TRUE)
+    mutate_package(pkg_dir, cores = 1, max_line_deletions = 0, fail_fast = TRUE,
+      coverage_guided = FALSE)
   )
   n_ff <- count_runs(sentinel)
 
@@ -503,7 +541,8 @@ test_that("fail_fast stops the suite at the first failing test but keeps the ver
   Sys.setenv(TESTTHAT_MAX_FAILS = "1")
   unlink(sentinel)
   res_full <- suppressMessages(
-    mutate_package(pkg_dir, cores = 1, max_line_deletions = 0, fail_fast = FALSE)
+    mutate_package(pkg_dir, cores = 1, max_line_deletions = 0, fail_fast = FALSE,
+      coverage_guided = FALSE)
   )
   n_full <- count_runs(sentinel)
 
