@@ -6,7 +6,7 @@
 #     mutation:
 #       permissions:
 #         contents: write        # only needed when deploy-badge: true
-#       uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v1
+#       uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.1.0
 #       with:
 #         target-margin: "0.10"
 #
@@ -75,7 +75,7 @@ on:
       badge-label:
         description: Label shown on the shields.io badge.
         type: string
-        default: mutation score
+        default: mutator
       deploy-badge:
         description: Publish the badge JSON to a branch via GitHub Pages (requires contents:write on the caller job).
         type: boolean

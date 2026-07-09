@@ -19,7 +19,7 @@
 #   MUTATOR_COVERAGE_GUIDED "true"/"false" run only covering tests (default "true")
 #   MUTATOR_EXCLUDE_FILES   comma/space separated glob patterns to skip
 #   MUTATOR_FAIL_UNDER      fail the job if the score (%) is below this number
-#   MUTATOR_BADGE_LABEL     badge label (default "mutation score")
+#   MUTATOR_BADGE_LABEL     badge label (default "mutator")
 
 # ---- environment helpers ---------------------------------------------------
 
@@ -72,13 +72,30 @@ format_score <- function(score) {
   if (is.na(score)) "unknown" else sprintf("%.1f%%", score)
 }
 
+format_score_ci <- function(ci, confidence = 0.95) {
+  if (is.null(ci)) return(NULL)
+  if (!is.numeric(ci) || length(ci) != 2L || anyNA(ci)) return(NULL)
+  sprintf("%g%% CI", 100 * confidence)
+}
+
+format_badge_message <- function(score, ci = NULL, confidence = 0.95) {
+  score_label <- format_score(score)
+  ci_label <- format_score_ci(ci, confidence)
+  if (is.null(ci_label) || identical(score_label, "unknown")) {
+    score_label
+  } else {
+    ci_half_width <- max(abs(score - ci))
+    sprintf("%s ±%.1f%% (%s)", score_label, ci_half_width, ci_label)
+  }
+}
+
 # ---- run -------------------------------------------------------------------
 
 main <- function() {
   pkg_dir <- normalizePath(env_chr("MUTATOR_PKG_DIR", "."),
                            winslash = "/", mustWork = TRUE)
   out_dir <- env_chr("MUTATOR_OUT_DIR", "mutation-results")
-  label <- env_chr("MUTATOR_BADGE_LABEL", "mutation score")
+  label <- env_chr("MUTATOR_BADGE_LABEL", "mutator")
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
   write_badge <- function(message, color) {
@@ -134,7 +151,10 @@ main <- function() {
   summary <- result$summary
   score <- summary$mutation_score
   score_label <- format_score(score)
-  write_badge(score_label, mutation_badge_color(score))
+  confidence <- summary$confidence
+  if (is.null(confidence) || is.na(confidence)) confidence <- 0.95
+  badge_message <- format_badge_message(score, summary$mutation_score_ci, confidence)
+  write_badge(badge_message, mutation_badge_color(score))
   message(sprintf("Mutation score: %s (%d killed / %d tested)",
                   score_label, summary$killed, summary$tested))
 
