@@ -84,8 +84,9 @@ format_badge_message <- function(score, ci = NULL, confidence = 0.95) {
   if (is.null(ci_label) || identical(score_label, "unknown")) {
     score_label
   } else {
-    ci_half_width <- max(abs(score - ci))
-    sprintf("%s ±%.1f%% (%s)", score_label, ci_half_width, ci_label)
+    ci_low <- max(0, score - ci[1])
+    ci_high <- max(0, ci[2] - score)
+    sprintf("%s -%.1f/+%.1f%% (%s)", score_label, ci_low, ci_high, ci_label)
   }
 }
 

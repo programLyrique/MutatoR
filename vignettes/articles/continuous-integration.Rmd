@@ -122,8 +122,8 @@ Reference the badge in your README, replacing `OWNER/REPO`:
 ```
 
 The badge is labelled `mutator`; its message shows the score and, when the run
-sampled mutants, a compact confidence interval half-width such as
-`83.2% ±5.2% (95% CI)`. The badge colour tracks the score: green above 80%,
+sampled mutants, a compact asymmetric confidence interval such as
+`83.2% -5.2/+4.7% (95% CI)`. The badge colour tracks the score: green above 80%,
 yellow above 60%, orange above 40%, and red below.
 
 ## Permissions and private dependencies
