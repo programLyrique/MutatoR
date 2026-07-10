@@ -510,6 +510,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
     proc <- tryCatch(
       callr::r_bg(
         function(pkg_path, not_cran, fail_fast, harness_args) {
+          # nocov start (runs in a callr subprocess; covr cannot instrument it)
           # Control NOT_CRAN so skip_on_cran()/skip_if_offline() behave as on
           # CRAN ("false") or run everything in dev mode ("true").
           Sys.setenv(NOT_CRAN = not_cran)
@@ -541,6 +542,7 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
             c(list("tests/testthat", reporter = reporter), harness_args)
           )
           sum(tr$failed)
+          # nocov end
         },
         args = list(
           pkg_path = pkg_path,
@@ -671,47 +673,11 @@ mutate_package <- function(pkg_dir, cores = max(1, parallel::detectCores() - 2),
   # every mutant all go through the fast --no-libs install path. A failure here
   # means the unmutated package does not install/compile. A failure is considered
   # as fatal as a failing baseline run.
-  build_installed_template <- function() {
-    installed_pkg_name <<- get_package_name(pkg_dir)
-    template_lib <- tempfile("mutator_template_lib_")
-    dir.create(template_lib, recursive = TRUE, showWarnings = FALSE)
-    r_bin <- file.path(R.home("bin"), "R")
-    out <- tryCatch(
-      suppressWarnings(system2(
-        r_bin,
-        args = c(
-          "CMD", "INSTALL", "--install-tests", "--no-multiarch",
-          paste0("--library=", template_lib), pkg_dir
-        ),
-        stdout = TRUE, stderr = TRUE
-      )),
-      error = function(e) e
-    )
-    status <- if (inherits(out, "error")) {
-      1L
-    } else {
-      s <- attr(out, "status")
-      if (is.null(s)) 0L else as.integer(s)
-    }
-    if (!identical(status, 0L)) {
-      detail <- if (inherits(out, "error")) {
-        conditionMessage(out)
-      } else {
-        paste(utils::tail(out, 10), collapse = "\n")
-      }
-      stop(sprintf(
-        "Could not build the install template (the unmutated package failed to install/compile).\n  %s",
-        detail
-      ), call. = FALSE)
-    }
-    installed_template_lib <<- template_lib
-    installed_template_has_libs <<- dir.exists(
-      file.path(template_lib, installed_pkg_name, "libs")
-    )
-  }
-
   if (identical(test_strategy, "installed-tests")) {
-    build_installed_template()
+    template <- build_installed_template(pkg_dir)
+    installed_pkg_name <- template$pkg_name
+    installed_template_lib <- template$lib
+    installed_template_has_libs <- template$has_libs
     on.exit(unlink(installed_template_lib, recursive = TRUE, force = TRUE), add = TRUE)
   }
 
@@ -1732,4 +1698,50 @@ run_installed_pkg_tests <- function(pkg_path, timeout_seconds,
   }
 
   list(passed = passed, failure = failure)
+}
+
+# Install the unmutated package once into a throwaway "template" library so each
+# mutant can be installed with --no-libs and reuse these compiled objects rather
+# than recompiling C/C++ every time. Extracted from mutate_package() so the
+# build-failure branch is unit-testable. Returns list(lib, pkg_name, has_libs); a
+# failed template build (the unmutated package does not install/compile) is fatal
+# and raised as an error.
+build_installed_template <- function(pkg_dir) {
+  pkg_name <- get_package_name(pkg_dir)
+  template_lib <- tempfile("mutator_template_lib_")
+  dir.create(template_lib, recursive = TRUE, showWarnings = FALSE)
+  r_bin <- file.path(R.home("bin"), "R")
+  out <- tryCatch(
+    suppressWarnings(system2(
+      r_bin,
+      args = c(
+        "CMD", "INSTALL", "--install-tests", "--no-multiarch",
+        paste0("--library=", template_lib), pkg_dir
+      ),
+      stdout = TRUE, stderr = TRUE
+    )),
+    error = function(e) e
+  )
+  status <- if (inherits(out, "error")) {
+    1L
+  } else {
+    s <- attr(out, "status")
+    if (is.null(s)) 0L else as.integer(s)
+  }
+  if (!identical(status, 0L)) {
+    detail <- if (inherits(out, "error")) {
+      conditionMessage(out)
+    } else {
+      paste(utils::tail(out, 10), collapse = "\n")
+    }
+    stop(sprintf(
+      "Could not build the install template (the unmutated package failed to install/compile).\n  %s",
+      detail
+    ), call. = FALSE)
+  }
+  list(
+    lib = template_lib,
+    pkg_name = pkg_name,
+    has_libs = dir.exists(file.path(template_lib, pkg_name, "libs"))
+  )
 }

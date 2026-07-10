@@ -7,6 +7,7 @@
 # injection rather than only through a full mutate_package() run.
 
 run_installed_pkg_tests <- mutator:::run_installed_pkg_tests
+build_installed_template <- mutator:::build_installed_template
 
 # Build a minimal, installable package under a fresh temp dir. `r_code` is the
 # body of R/add.R and `test_code` the body of a tests/ script; either can be
@@ -73,6 +74,29 @@ test_that("a directory without DESCRIPTION reports a metadata error", {
 
   expect_false(res$passed)
   expect_match(res$failure, "Cannot read package metadata")
+})
+
+test_that("build_installed_template installs the unmutated package once", {
+  pkg <- make_pkg("goodTemplatePkg")
+  on.exit(unlink(dirname(pkg), recursive = TRUE), add = TRUE)
+
+  template <- build_installed_template(pkg)
+  on.exit(unlink(template$lib, recursive = TRUE, force = TRUE), add = TRUE)
+
+  expect_true(dir.exists(file.path(template$lib, "goodTemplatePkg")))
+  expect_equal(unname(template$pkg_name), "goodTemplatePkg")
+  # A pure-R package installs no shared objects.
+  expect_false(template$has_libs)
+})
+
+test_that("build_installed_template errors when the unmutated package fails to install", {
+  pkg <- make_pkg("brokenTemplatePkg", r_code = "add <- function(a, b) {")
+  on.exit(unlink(dirname(pkg), recursive = TRUE), add = TRUE)
+
+  expect_error(
+    suppressMessages(build_installed_template(pkg)),
+    "Could not build the install template"
+  )
 })
 
 test_that("exceeding the timeout raises a HANG-signalling error", {
