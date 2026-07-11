@@ -629,15 +629,10 @@ test_that("exclude_files and # mutator:ignore-file skip whole files", {
 })
 
 test_that("# mutator:ignore-start/-end excludes a function's mutants", {
-  skip_if_not_installed("pkgload")
-  skip_if_not_installed("furrr")
-  skip_if_not_installed("future")
-
-  temp_dir <- tempfile()
-  dir.create(temp_dir)
-  on.exit(unlink(temp_dir, recursive = TRUE))
-
-  # keep_fn comes first (lines 1-3); drop_fn is wrapped in an ignore region.
+  # ignore-start/-end is an in-source, file-level directive applied during mutant
+  # *generation*, so this checks it via mutate_file() directly (no test runs)
+  # rather than mutate_package(). keep_fn comes first (lines 1-3); drop_fn is
+  # wrapped in an ignore region.
   funcs <- c(
     "keep_fn <- function(x, y) {",
     "  x + y",
@@ -657,28 +652,21 @@ test_that("# mutator:ignore-start/-end excludes a function's mutants", {
     }, integer(1))
   }
 
-  build <- function(name, lines) {
-    make_exclusion_pkg(
-      temp_dir, name,
-      r_files = list("funcs.R" = lines),
-      test_files = list("test-funcs.R" = "test_that('funcs', {
-  expect_equal(keep_fn(1, 2), 3)
-  expect_equal(drop_fn(5, 2), 3)
-})")
-    )
+  mutate_lines <- function(lines) {
+    src <- tempfile(fileext = ".R")
+    writeLines(lines, src)
+    mutate_file(src, out_dir = tempfile("m_"), max_line_deletions = 5)
   }
 
-  with_region <- mutate_package(build("regionMutatoR", funcs),
-    cores = 1, max_line_deletions = 5)
-  no_region <- mutate_package(build("plainMutatoR", funcs[-c(4, 8)]),
-    cores = 1, max_line_deletions = 5)
+  with_region <- mutate_lines(funcs)
+  no_region <- mutate_lines(funcs[-c(4, 8)])
 
   # The region removes drop_fn's mutants, so fewer are generated overall.
-  expect_lt(length(with_region$package_mutants), length(no_region$package_mutants))
+  expect_lt(length(with_region), length(no_region))
 
-  # Every surviving mutant is attributed to keep_fn (lines 1-3); none to the
+  # Every generated mutant is attributed to keep_fn (lines 1-3); none to the
   # excluded drop_fn region (lines >= 4).
-  starts <- extract_start_lines(with_region$package_mutants)
+  starts <- extract_start_lines(with_region)
   expect_true(length(starts) > 0)
   expect_true(all(starts <= 3L, na.rm = TRUE))
 })
