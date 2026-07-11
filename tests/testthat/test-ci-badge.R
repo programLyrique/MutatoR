@@ -14,3 +14,13 @@ test_that("CI badge message includes confidence interval when available", {
     "83.2% -5.2/+4.7% (95% CI)"
   )
 })
+
+test_that("CI badge message can hide an available confidence interval", {
+  ci <- new.env(parent = globalenv())
+  sys.source(system.file("ci", "mutation-score.R", package = "mutator"), envir = ci)
+
+  expect_equal(
+    ci$format_badge_message(83.25, c(78.1, 87.9), 0.95, show_ci = FALSE),
+    "83.2%"
+  )
+})

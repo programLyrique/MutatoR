@@ -72,6 +72,10 @@ on:
         description: Fail the job if the mutation score (percent) is below this number. Empty never fails.
         type: string
         default: ""
+      show-confidence-interval:
+        description: Show the confidence interval alongside the mutation score when mutants are sampled.
+        type: boolean
+        default: true
       badge-label:
         description: Label shown on the shields.io badge.
         type: string
@@ -137,6 +141,7 @@ jobs:
           MUTATOR_COVERAGE_GUIDED: ${{ inputs.coverage-guided }}
           MUTATOR_EXCLUDE_FILES: ${{ inputs.exclude-files }}
           MUTATOR_FAIL_UNDER: ${{ inputs.fail-under }}
+          MUTATOR_SHOW_CONFIDENCE_INTERVAL: ${{ inputs.show-confidence-interval }}
           MUTATOR_BADGE_LABEL: ${{ inputs.badge-label }}
         run: source(system.file("ci", "mutation-score.R", package = "mutator"))
 

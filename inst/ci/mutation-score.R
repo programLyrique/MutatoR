@@ -19,6 +19,7 @@
 #   MUTATOR_COVERAGE_GUIDED "true"/"false" run only covering tests (default "true")
 #   MUTATOR_EXCLUDE_FILES   comma/space separated glob patterns to skip
 #   MUTATOR_FAIL_UNDER      fail the job if the score (%) is below this number
+#   MUTATOR_SHOW_CONFIDENCE_INTERVAL "true"/"false" show sampled-score CI
 #   MUTATOR_BADGE_LABEL     badge label (default "mutator")
 
 # ---- environment helpers ---------------------------------------------------
@@ -78,8 +79,10 @@ format_score_ci <- function(ci, confidence = 0.95) {
   sprintf("%g%% CI", 100 * confidence)
 }
 
-format_badge_message <- function(score, ci = NULL, confidence = 0.95) {
+format_badge_message <- function(score, ci = NULL, confidence = 0.95,
+                                 show_ci = TRUE) {
   score_label <- format_score(score)
+  if (!show_ci) return(score_label)
   ci_label <- format_score_ci(ci, confidence)
   if (is.null(ci_label) || identical(score_label, "unknown")) {
     score_label
@@ -154,7 +157,10 @@ main <- function() {
   score_label <- format_score(score)
   confidence <- summary$confidence
   if (is.null(confidence) || is.na(confidence)) confidence <- 0.95
-  badge_message <- format_badge_message(score, summary$mutation_score_ci, confidence)
+  show_ci <- env_bool("MUTATOR_SHOW_CONFIDENCE_INTERVAL", TRUE)
+  badge_message <- format_badge_message(
+    score, summary$mutation_score_ci, confidence, show_ci
+  )
   write_badge(badge_message, mutation_badge_color(score))
   message(sprintf("Mutation score: %s (%d killed / %d tested)",
                   score_label, summary$killed, summary$tested))
@@ -162,12 +168,16 @@ main <- function() {
   # GitHub Actions job summary (Markdown), when running inside Actions.
   step_summary <- Sys.getenv("GITHUB_STEP_SUMMARY", unset = "")
   if (nzchar(step_summary)) {
-    ci <- summary$mutation_score_ci
-    ci_txt <- if (is.null(ci)) "n/a" else
-      sprintf("[%.1f%%, %.1f%%]", ci[1], ci[2])
+    ci <- if (show_ci) summary$mutation_score_ci else NULL
+    score_summary <- if (is.null(ci)) {
+      sprintf("**Score: %s**", score_label)
+    } else {
+      sprintf("**Score: %s** (%g%% CI [%.1f%%, %.1f%%])",
+              score_label, 100 * confidence, ci[1], ci[2])
+    }
     lines <- c(
       "## Mutation testing", "",
-      sprintf("**Score: %s** (95%% CI %s)", score_label, ci_txt), "",
+      score_summary, "",
       "| Metric | Value |", "| --- | --- |",
       sprintf("| Generated | %d |", summary$generated),
       sprintf("| Tested | %d |", summary$tested),
