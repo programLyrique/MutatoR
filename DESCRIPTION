@@ -19,7 +19,6 @@ Roxygen: list(markdown = TRUE)
 Imports:
     jsonlite,
     httr,
-    parallel,
     pkgload,
     testthat,
     future,
@@ -28,7 +27,6 @@ Imports:
     covr,
     R6
 Suggests:
-    xml2,
     pkgbuild,
     cli,
     pbmcapply
