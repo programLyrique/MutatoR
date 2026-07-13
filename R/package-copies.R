@@ -35,13 +35,8 @@ link_or_copy <- function(from, to, recursive = FALSE, link = file.symlink) {
   invisible(TRUE)
 }
 
-# TRUE if a tests/ tree contains a testthat snapshot directory.
-tests_have_snapshots <- function(tests_dir) {
-  any(basename(list.dirs(tests_dir, recursive = TRUE)) == "_snaps")
-}
-
-# Mirror tests using links, but deep-copy snapshot directories so concurrent
-# mutants cannot rewrite a shared snapshot tree.
+# Materialise the tests tree using links, but deep-copy snapshot directories so
+# testthat cannot create or rewrite snapshots through a link to the source tree.
 mirror_tests_isolating_snapshots <- function(from, to) {
   dir.create(to, recursive = TRUE, showWarnings = FALSE)
   for (entry in list.files(from, all.files = TRUE, no.. = TRUE, full.names = TRUE)) {
@@ -76,7 +71,7 @@ create_mutant_package_copy <- function(pkg_dir, src_file, mutated_file,
     if (name %in% isolate_copy_dirs && dir.exists(entry)) {
       file.copy(entry, pkg_copy, recursive = TRUE)
     } else if (identical(name, "tests") && dir.exists(entry) &&
-      identical(test_strategy, "testthat") && tests_have_snapshots(entry)) {
+      identical(test_strategy, "testthat")) {
       mirror_tests_isolating_snapshots(entry, target)
     } else {
       link_or_copy(entry, target, recursive = dir.exists(entry))

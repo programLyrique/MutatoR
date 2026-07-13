@@ -12,4 +12,5 @@ Rscript tests/system/run.R --profile=full
 
 `bootstrap.R` downloads the exact fixture versions from `fixtures.R` into the
 ignored `packages/system/` directory and, by default, installs their dependencies.
-Snapshots intentionally exclude timing and temporary paths.
+Snapshots intentionally exclude timing and temporary paths. The runner disables
+coverage-guided selection so the seeded mutant sample is reproducible.

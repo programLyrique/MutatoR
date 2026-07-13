@@ -187,3 +187,32 @@ test_that("create_mutant_package_copy deep-copies tests/ when isolate = TRUE", {
   expect_true(dir.exists(file.path(mutant_pkg, "tests", "testthat")))
   expect_true(file.exists(file.path(mutant_pkg, "tests", "testthat", "test-basic.R")))
 })
+
+test_that("testthat copies cannot create snapshots in the source package", {
+  temp_dir <- tempfile()
+  dir.create(temp_dir)
+  on.exit(unlink(temp_dir, recursive = TRUE), add = TRUE)
+
+  pkg_dir <- file.path(temp_dir, "testMutatorSnapshots")
+  dir.create(file.path(pkg_dir, "R"), recursive = TRUE)
+  dir.create(file.path(pkg_dir, "tests", "testthat"), recursive = TRUE)
+  writeLines("Package: testMutatorSnapshots\nVersion: 0.1.0\nLicense: MIT",
+    file.path(pkg_dir, "DESCRIPTION"))
+  writeLines("f <- function() TRUE", file.path(pkg_dir, "R", "f.R"))
+  writeLines("test_that(\"f\", expect_true(f()))",
+    file.path(pkg_dir, "tests", "testthat", "test-f.R"))
+
+  mutated_file <- tempfile(fileext = ".R")
+  writeLines("f <- function() FALSE", mutated_file)
+  mutant_pkg <- mutator:::create_mutant_package_copy(
+    pkg_dir,
+    file.path(pkg_dir, "R", "f.R"),
+    mutated_file,
+    tempfile("mut_"),
+    test_strategy = "testthat"
+  )
+
+  expect_identical(Sys.readlink(file.path(mutant_pkg, "tests")), "")
+  dir.create(file.path(mutant_pkg, "tests", "testthat", "_snaps"))
+  expect_false(dir.exists(file.path(pkg_dir, "tests", "testthat", "_snaps")))
+})

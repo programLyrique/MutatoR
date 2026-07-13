@@ -68,7 +68,6 @@ normalise_mutation_result <- function(result, fixture_dir) {
 run_system_fixture <- function(package) {
   fixture_dir <- file.path(SYSTEM_ROOT, "packages", "system", package)
   profile <- system_profile()
-  coverage_guided <- dir.exists(file.path(fixture_dir, "tests", "testthat"))
   set.seed(SYSTEM_SEED)
   result <- suppressMessages(tryCatch(
     mutate_package(
@@ -76,7 +75,7 @@ run_system_fixture <- function(package) {
       cores = 4,
       max_mutants = profile$max_mutants,
       timeout_seconds = SYSTEM_TIMEOUT_SECONDS,
-      coverage_guided = coverage_guided,
+      coverage_guided = FALSE,
       max_show = 0
     ),
     error = function(e) e

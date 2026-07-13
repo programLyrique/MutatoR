@@ -1,9 +1,7 @@
-# Covers mirror_tests_isolating_snaps(): when a testthat package has a `_snaps`
-# directory and is mutated with isolate = FALSE (the default), each mutant's
-# package copy symlinks the test files but gets its own deep copy of `_snaps`,
-# so parallel mutant runs cannot rewrite (and corrupt) the original snapshots.
-# The branch is only reached under the testthat strategy with isolate = FALSE;
-# with isolate = TRUE the whole tests/ tree is deep-copied instead.
+# Covers mirror_tests_isolating_snapshots(): each mutant's package copy symlinks
+# test files but gets its own deep copy of `_snaps`, so parallel mutant runs
+# cannot rewrite (and corrupt) the original snapshots. With isolate = TRUE the
+# whole tests/ tree is deep-copied instead.
 
 test_that("a tests/ tree with _snaps is materialised for each mutant", {
   skip_if_not_installed("pkgload")
@@ -17,9 +15,8 @@ test_that("a tests/ tree with _snaps is materialised for each mutant", {
   pkg_dir <- file.path(temp_dir, pkg_name)
   dir.create(file.path(pkg_dir, "R"), recursive = TRUE)
   dir.create(file.path(pkg_dir, "tests", "testthat"), recursive = TRUE)
-  # tests_have_snapshots() scans all of tests/ for a dir named "_snaps". Placing
-  # it directly under tests/ (not tests/testthat/) triggers the mirroring branch
-  # without testthat's snapshot manager pruning it during the baseline run.
+  # Place it directly under tests/ (not tests/testthat/) so testthat's snapshot
+  # manager does not prune it during the baseline run.
   dir.create(file.path(pkg_dir, "tests", "_snaps"), recursive = TRUE)
 
   writeLines(sprintf(
@@ -35,7 +32,6 @@ test_that("a tests/ tree with _snaps is materialised for each mutant", {
     "test_that(\"add works\", { expect_equal(add(1, 2), 3) })",
     file.path(pkg_dir, "tests", "testthat", "test-add.R")
   )
-  # A pre-existing snapshot directory triggers the snapshot-isolating copy path.
   snap_file <- file.path(pkg_dir, "tests", "_snaps", "add.md")
   writeLines(c("# add works", "", "reference"), snap_file)
   snap_before <- readLines(snap_file)
