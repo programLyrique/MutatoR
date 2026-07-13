@@ -154,9 +154,9 @@ expect_system_result_invariant <- function(reference, candidate, variant) {
     system_result_metrics(reference),
     info = info
   )
-  testthat::expect_setequal(
-    names(candidate$test_results),
-    names(reference$test_results),
+  testthat::expect_identical(
+    sort(names(candidate$test_results)),
+    sort(names(reference$test_results)),
     info = info
   )
   testthat::expect_identical(
