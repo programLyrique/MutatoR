@@ -99,7 +99,8 @@ context("ASTHandler C++ tests")
         SEXP srcref = PROTECT(makeSrcref());
 
         SEXP srcfile_env = PROTECT(R_NewEnv(R_EmptyEnv, TRUE, 29));
-        Rf_defineVar(Rf_install("filename"), Rf_mkString("env_file.R"), srcfile_env);
+        SEXP filename = PROTECT(Rf_mkString("env_file.R"));
+        Rf_defineVar(Rf_install("filename"), filename, srcfile_env);
         Rf_setAttrib(srcref, Rf_install("srcfile"), srcfile_env);
 
         ASTHandler handler;
@@ -108,6 +109,6 @@ context("ASTHandler C++ tests")
         expect_true(!ops.empty());
         expect_true(ops[0].file_path == "env_file.R");
 
-        UNPROTECT(3);
+        UNPROTECT(4);
     }
 }

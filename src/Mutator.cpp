@@ -167,7 +167,7 @@ std::pair<SEXP, bool> Mutator::applyFlipMutation(SEXP expr, const std::vector<Op
 
     SEXP info = PROTECT(buildMutationInfo(pos, CAR(node))); // [1]
     Rf_setAttrib(mutated, Rf_install("mutation_info"), info);
-    UNPROTECT(1); // drop info, mutated still protected
+    UNPROTECT(2);
     return {mutated, true};
 }
 
@@ -254,7 +254,7 @@ std::pair<SEXP, bool> Mutator::applyDeleteMutation(SEXP expr, const std::vector<
     // attach structured mutation_info
     SEXP info = PROTECT(buildMutationInfo(pos, R_NilValue)); // [1]
     Rf_setAttrib(dup, Rf_install("mutation_info"), info);
-    UNPROTECT(1); // drop info, dup still protected
+    UNPROTECT(2);
     return {dup, true};
 }
 
@@ -269,20 +269,15 @@ std::pair<SEXP, bool> Mutator::applyNodeReplacementMutation(SEXP expr, const std
         return {R_NilValue, false};
 
     SEXP dup = PROTECT(Rf_duplicate(expr)); // [0]
-    int n_protect = 1;
-
     SEXP replacement = PROTECT(repl->makeReplacement()); // [1]
-    ++n_protect;
 
     if (pos.path.empty())
     {
         SEXP root = replacement;
         SEXP info = PROTECT(buildMutationInfo(pos, repl->infoReplacement())); // [2]
-        ++n_protect;
         if (root != R_NilValue)
             Rf_setAttrib(root, Rf_install("mutation_info"), info);
-        UNPROTECT(n_protect);
-        PROTECT(root);
+        UNPROTECT(3);
         return {root, true};
     }
 
@@ -292,7 +287,7 @@ std::pair<SEXP, bool> Mutator::applyNodeReplacementMutation(SEXP expr, const std
         int idx = pos.path[i];
         if (idx < 0 || parent == R_NilValue || TYPEOF(parent) != LANGSXP)
         {
-            UNPROTECT(n_protect);
+            UNPROTECT(2);
             return {R_NilValue, false};
         }
 
@@ -301,14 +296,14 @@ std::pair<SEXP, bool> Mutator::applyNodeReplacementMutation(SEXP expr, const std
         {
             if (iter == R_NilValue)
             {
-                UNPROTECT(n_protect);
+                UNPROTECT(2);
                 return {R_NilValue, false};
             }
             iter = CDR(iter);
         }
         if (iter == R_NilValue)
         {
-            UNPROTECT(n_protect);
+            UNPROTECT(2);
             return {R_NilValue, false};
         }
         parent = CAR(iter);
@@ -317,7 +312,7 @@ std::pair<SEXP, bool> Mutator::applyNodeReplacementMutation(SEXP expr, const std
     int target_idx = pos.path.back();
     if (target_idx < 0 || parent == R_NilValue || TYPEOF(parent) != LANGSXP)
     {
-        UNPROTECT(n_protect);
+        UNPROTECT(2);
         return {R_NilValue, false};
     }
 
@@ -326,23 +321,22 @@ std::pair<SEXP, bool> Mutator::applyNodeReplacementMutation(SEXP expr, const std
     {
         if (iter == R_NilValue)
         {
-            UNPROTECT(n_protect);
+            UNPROTECT(2);
             return {R_NilValue, false};
         }
         iter = CDR(iter);
     }
     if (iter == R_NilValue)
     {
-        UNPROTECT(n_protect);
+        UNPROTECT(2);
         return {R_NilValue, false};
     }
 
     SETCAR(iter, replacement);
 
     SEXP info = PROTECT(buildMutationInfo(pos, repl->infoReplacement())); // [2]
-    ++n_protect;
     Rf_setAttrib(dup, Rf_install("mutation_info"), info);
 
-    UNPROTECT(n_protect - 1); // keep dup protected for the caller
+    UNPROTECT(3);
     return {dup, true};
 }

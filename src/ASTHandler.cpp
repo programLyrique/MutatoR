@@ -218,7 +218,10 @@ static SEXP makeNAOfType(int type)
 
 static SEXP makeNotCall(SEXP expr)
 {
-    return Rf_lang2(SYM.s_not, Rf_duplicate(expr));
+    SEXP duplicated = PROTECT(Rf_duplicate(expr));
+    SEXP call = PROTECT(Rf_lang2(SYM.s_not, duplicated));
+    UNPROTECT(2);
+    return call;
 }
 
 // # nocov start (only reached from the disabled value-replacement family)

@@ -30,42 +30,36 @@ static SEXP mutate_single(SEXP expr_sexp, SEXP src_ref_sexp, bool is_inside_bloc
         expr_sexp = VECTOR_ELT(expr_sexp, 0);
     }
 
-    ASTHandler astHandler;
-    std::vector<OperatorPos> operators =
-        astHandler.gatherOperators(expr_sexp, src_ref_sexp, is_inside_block);
+    SEXP buffer = R_NilValue;
+    SEXP res = R_NilValue;
+    R_xlen_t n_mutants = 0;
 
-    const int n = static_cast<int>(operators.size());
-    if (n == 0) {
-        return Rf_allocVector(VECSXP, 0);     // no PROTECT needed – no alloc yet
-    }
+    {
+        ASTHandler astHandler;
+        std::vector<OperatorPos> operators =
+            astHandler.gatherOperators(expr_sexp, src_ref_sexp, is_inside_block);
 
-    Mutator mutator;
+        const int n = static_cast<int>(operators.size());
+        if (n == 0)
+            return Rf_allocVector(VECSXP, 0);
 
-    // applyMutation() returns each successful mutant already PROTECTed, so it
-    // survives the allocations of later iterations. We keep those protections on
-    // the stack and release them all at the end, once every mutant is reachable
-    // from the result list. n_protected tracks exactly what is on the stack
-    // (one per mutant, plus the result vector) so the final UNPROTECT is
-    // self-evidently balanced.
-    std::vector<SEXP> mutants;
-    mutants.reserve(n);
-    int n_protected = 0;
+        Mutator mutator;
+        buffer = PROTECT(Rf_allocVector(VECSXP, n));
 
-    for (int i = 0; i < n; ++i) {
-        auto result = mutator.applyMutation(expr_sexp, operators, i);
-        if (result.second) {
-            mutants.push_back(result.first); // already PROTECTed by applyMutation
-            ++n_protected;
+        for (int i = 0; i < n; ++i) {
+            auto result = mutator.applyMutation(expr_sexp, operators, i);
+            if (result.second)
+                SET_VECTOR_ELT(buffer, n_mutants++, result.first);
         }
+
+        res = PROTECT(Rf_allocVector(VECSXP, n_mutants));
+        for (R_xlen_t i = 0; i < n_mutants; ++i)
+            SET_VECTOR_ELT(res, i, VECTOR_ELT(buffer, i));
     }
 
-    const R_xlen_t m = static_cast<R_xlen_t>(mutants.size());
-    SEXP res = PROTECT(Rf_allocVector(VECSXP, m));
-    ++n_protected;
-    for (R_xlen_t i = 0; i < m; ++i)
-        SET_VECTOR_ELT(res, i, mutants[i]);
-
-    UNPROTECT(n_protected); // every mutant + res
+    // Destroying NodeReplacementOperators releases preserved R objects. Keep the
+    // completed result protected until that cleanup has happened.
+    UNPROTECT(2);
     return res;
 }
 
