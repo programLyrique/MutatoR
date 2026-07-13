@@ -27,6 +27,7 @@ jobs:
         with:
           extra-packages: any::remotes, github::PRL-PRG/imputesrcref@fix-r-4-6-public-c-api
           needs: check
+          dependencies: 'c("Depends", "Imports", "LinkingTo", "Suggests")'
       - uses: actions/cache@v4
         with:
           path: packages/system
@@ -49,6 +50,7 @@ jobs:
         with:
           extra-packages: any::remotes, github::PRL-PRG/imputesrcref@fix-r-4-6-public-c-api
           needs: check
+          dependencies: 'c("Depends", "Imports", "LinkingTo", "Suggests")'
       - uses: actions/cache@v4
         with:
           path: packages/system
