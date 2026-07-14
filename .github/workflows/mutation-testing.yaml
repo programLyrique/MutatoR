@@ -35,7 +35,7 @@ on:
       imputesrcref-spec:
         description: pak spec used to install imputesrcref.
         type: string
-        default: github::PRL-PRG/imputesrcref@fix-r-4-6-public-c-api
+        default: github::PRL-PRG/imputesrcref
       extra-packages:
         description: Additional pak specs to install (comma separated).
         type: string
