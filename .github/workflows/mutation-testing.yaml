@@ -6,7 +6,7 @@
 #     mutation:
 #       permissions:
 #         contents: write        # only needed when deploy-badge: true
-#       uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.1.0
+#       uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.1.1
 #       with:
 #         target-margin: "0.10"
 #
