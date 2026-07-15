@@ -87,7 +87,12 @@ build_coverage_map_record_tests <- function(pkg_dir, cran = TRUE) {
 # test file that was running, with no helper/setup files misattributed. Counters are reset by
 # zeroing `$value` (covr's own clear_counters() *removes* entries, which breaks
 # counting). Failures are summed so the run also serves as the baseline check.
-perfile_collect_code <- function(testdir, out, not_cran, pkgname) {
+perfile_collect_code <- function(testdir, out, not_cran, pkgname,
+                                 harness_args = list()) {
+  harness_args_expr <- paste(
+    deparse(harness_args, width.cutoff = 500L),
+    collapse = " "
+  )
   c(
     sprintf("Sys.setenv(NOT_CRAN = %s)", deparse(not_cran)),
     "local({",
@@ -110,7 +115,9 @@ perfile_collect_code <- function(testdir, out, not_cran, pkgname) {
     "    start_file = function(filename, ...) { self$cov_cur <- as.character(filename); reset() },",
     "    end_file = function(...) { self$cov_captured[[self$cov_cur]] <- snap() }))",
     "  rep <- Rep$new(); nfail <- NA_integer_",
-    sprintf("  err <- tryCatch({ res <- testthat::test_dir(%s, package = %s, reporter = rep, stop_on_failure = FALSE, load_package = 'installed'); df <- as.data.frame(res); nfail <- sum(df$failed) + sum(df$error, na.rm = TRUE); NA_character_ }, error = function(e) conditionMessage(e))", deparse(testdir), deparse(pkgname)),
+    sprintf("  test_args <- %s", harness_args_expr),
+    sprintf("  base_args <- list(%s, package = %s, reporter = rep, stop_on_failure = FALSE, load_package = 'installed')", deparse(testdir), deparse(pkgname)),
+    "  err <- tryCatch({ res <- do.call(testthat::test_dir, c(base_args, test_args)); df <- as.data.frame(res); nfail <- sum(df$failed) + sum(df$error, na.rm = TRUE); NA_character_ }, error = function(e) conditionMessage(e))",
     sprintf("  saveRDS(list(captured = rep$cov_captured, nfail = nfail, err = err), %s)", deparse(out)),
     "})"
   )
@@ -126,12 +133,16 @@ build_coverage_map_per_file <- function(pkg_dir, cran = TRUE) {
     stop("Package 'R6' is required for the per_file coverage backend.", call. = FALSE)
   }
   testdir <- file.path(pkg_dir, "tests", "testthat")
+  harness_args <- extract_harness_test_args(
+    file.path(pkg_dir, "tests", "testthat.R")
+  )
   out <- tempfile("mutator_perfile_cov_", fileext = ".rds")
   on.exit(unlink(out), add = TRUE)
   code <- perfile_collect_code(
     testdir = testdir, out = out,
     not_cran = if (isTRUE(cran)) "false" else "true",
-    pkgname = get_package_name(pkg_dir)
+    pkgname = get_package_name(pkg_dir),
+    harness_args = harness_args
   )
   old <- options(covr_no_exclusions)
   on.exit(options(old), add = TRUE)

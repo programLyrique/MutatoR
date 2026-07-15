@@ -105,6 +105,10 @@ test_that("build_coverage_map_per_file handles failures and aggregates captured 
     calls <- 0L
     testthat::local_mocked_bindings(
         get_package_name = function(pkg_dir) "pkg",
+        extract_harness_test_args = function(harness_file) {
+            expect_equal(harness_file, "/pkg/tests/testthat.R")
+            list(filter = "selected")
+        },
         .package = "mutator"
     )
     testthat::local_mocked_bindings(
@@ -112,6 +116,11 @@ test_that("build_coverage_map_per_file handles failures and aggregates captured 
             calls <<- calls + 1L
             expect_equal(pkg_dir, "/pkg")
             expect_equal(type, "none")
+            expect_match(
+                paste(code, collapse = "\n"),
+                'test_args <- list\\(filter = "selected"\\)'
+            )
+            expect_silent(parse(text = paste(code, collapse = "\n")))
             out <- extract_out(code)
             if (calls == 2L) {
                 saveRDS(list(captured = list(), nfail = 0L, err = "boom"), out)
