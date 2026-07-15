@@ -30,11 +30,14 @@ Suggests:
     xml2,
     pkgbuild,
     cli,
-    pbmcapply
+    pbmcapply,
+    knitr,
+    rmarkdown
 Enhances:
     imputesrcref
 LinkingTo:
     testthat
 Config/testthat/edition: 3
+VignetteBuilder: knitr
 SystemRequirements: C++17
 Config/roxygen2/version: 8.0.0
