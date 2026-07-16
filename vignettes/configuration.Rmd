@@ -1,5 +1,10 @@
 ---
 title: "Configuration"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Configuration}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
 ---
 
 ```{r, include = FALSE}
@@ -9,12 +14,12 @@ knitr::opts_chunk$set(
 )
 ```
 
-This article documents the options that control how `mutate_package()` runs:
+This vignette documents the options that control how `mutate_package()` runs:
 how mutant timeouts are calibrated, which tests are selected, how parallel
 workers are isolated, how to exclude code from mutation, and how the optional
 coverage-guided, precise-location, and equivalent-mutant-detection features
-behave. See the [reference](../reference/index.html) for the full argument and
-return-value documentation.
+behave. See `?mutate_package` for the full argument and return-value
+documentation.
 
 ## Timeouts and contention in parallel mode
 
