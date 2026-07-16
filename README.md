@@ -44,6 +44,8 @@ If your test suite does not catch this change, it indicates that your tests may 
 
 `mutator` will compute how many mutants _survives_, i.e. the test suite does not fail for the mutant, and how many mutants are _killed_, i.e. the test suite fails for the mutant. The ratio of killed mutants to total mutants is called the **mutation score** and is a measure of test suite effectiveness.
 
+For a broader introduction to the tool, see the [useR! 2026 talk on mutator](https://www.pdonatbouillud.com/talk/beyond-code-coverage-mutation-testing-in-r-with-mutator/).
+
 
 ## Features
 
@@ -139,8 +141,9 @@ jobs:
 Pin to a released tag such as `@v0.1.1`; the workflow is versioned with the
 mutator package, so the tag matches the package version. Set `deploy-badge: true`
 (with `contents: write` permission) to publish a shields.io badge. See the
-[Continuous integration article](https://prl-prg.github.io/mutator/articles/continuous-integration.html)
-for every input, threshold guidance, and badge setup.
+[Continuous integration vignette](https://prl-prg.github.io/mutator/articles/continuous-integration.html)
+for every input, threshold guidance, and badge setup. From an installed copy,
+open it with `vignette("continuous-integration", package = "mutator")`.
 
 ## Mutation testing modes
 
@@ -155,7 +158,9 @@ The fallback path supports non-`testthat` layouts (for example `tinytest`-driven
 
 `mutate_package()` exposes a number of options to control how mutants are run,
 which tests are selected, and how results are refined. Each is covered in depth
-in the **[Configuration article](https://prl-prg.github.io/mutator/articles/configuration.html)**:
+in the **[Configuration vignette](https://prl-prg.github.io/mutator/articles/configuration.html)**
+(from an installed copy, open it with
+`vignette("configuration", package = "mutator")`):
 
 - **Timeouts and the contended baseline**: how the per-mutant `HANG` timeout is
   self-calibrated from a parallelism-aware baseline, and `timeout_seconds` to
