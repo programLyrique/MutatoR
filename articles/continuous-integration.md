@@ -1,6 +1,6 @@
 # Continuous integration
 
-This article explains how to run mutator on a package in GitHub Actions
+This vignette explains how to run mutator on a package in GitHub Actions
 using the reusable workflow that ships with the package, how to gate a
 pull request on a minimum mutation score, and how to publish a badge.
 
@@ -28,12 +28,12 @@ name: mutation-testing
 
 jobs:
   mutation:
-    uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.1.0
+    uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.1.1
     with:
       target-margin: "0.10"
 ```
 
-Pin to a released tag such as `@v0.1.0`. The reusable workflow lives in
+Pin to a released tag such as `@v0.1.1`. The reusable workflow lives in
 the mutator package repository and is versioned with the package, so the
 tag you pin matches a mutator release. Bump the tag in your caller when
 you want to move to a newer release. You can also pin to a branch (for
@@ -72,7 +72,7 @@ the job exits non-zero, which blocks the pull request:
 ``` yaml
 jobs:
   mutation:
-    uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.1.0
+    uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.1.1
     with:
       fail-under: "75"
       target-margin: "0.05"
@@ -108,7 +108,7 @@ jobs:
   mutation:
     permissions:
       contents: write
-    uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.1.0
+    uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.1.1
     with:
       deploy-badge: true
 ```
@@ -118,6 +118,13 @@ Reference the badge in your README, replacing `OWNER/REPO`:
 ``` markdown
 ![mutator](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/OWNER/REPO/gh-pages/mutation-score.json)
 ```
+
+This reads the JSON straight from `badge-branch` via
+`raw.githubusercontent.com`, so no GitHub Pages setup is needed. If you
+instead fetch it through a pkgdown Pages site
+(`https://OWNER.github.io/REPO/mutation-score.json`), GitHub Pages must
+be activated and serving from `badge-branch`, or the badge will not
+appear.
 
 The badge is labelled `mutator`; its message shows the score and, when
 the run sampled mutants, a compact asymmetric confidence interval such
