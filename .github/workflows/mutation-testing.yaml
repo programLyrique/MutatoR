@@ -6,7 +6,7 @@
 #     mutation:
 #       permissions:
 #         contents: write        # only needed when deploy-badge: true
-#       uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.1.1
+#       uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.2.2
 #       with:
 #         target-margin: "0.10"
 #
@@ -24,10 +24,38 @@ on:
         description: R version passed to r-lib/actions/setup-r.
         type: string
         default: release
-      mutator-spec:
-        description: pak spec used to install mutator (e.g. "any::mutator" for CRAN).
+      mutator-source:
+        description: >-
+          Where mutator is installed from: "cran" (default), "r-universe",
+          "github", or "local" (mutator is the package under test, so the
+          checkout itself provides it). Ignored when mutator-spec is set.
         type: string
-        default: github::PRL-PRG/mutator
+        default: cran
+      mutator-ref:
+        description: >-
+          Git ref used for the "github" source and for the fallback. Defaults to
+          the release this workflow is versioned with; keep it a tag so the
+          fallback stays reproducible.
+        type: string
+        default: v0.2.2
+      mutator-fallback:
+        description: >-
+          Fall back to github::PRL-PRG/mutator@<mutator-ref> when mutator cannot
+          be installed from CRAN or r-universe. No effect when mutator-spec is
+          set, or when mutator-source is "github" or "local".
+        type: boolean
+        default: true
+      r-universe-repo:
+        description: r-universe repository consulted when mutator-source is "r-universe".
+        type: string
+        default: https://prl-prg.r-universe.dev
+      mutator-spec:
+        description: >-
+          Explicit pak spec used to install mutator (e.g. "local::." or
+          "github::PRL-PRG/mutator@main"). Overrides mutator-source, and no
+          fallback is attempted. Empty by default.
+        type: string
+        default: ""
       install-imputesrcref:
         description: Install the optional imputesrcref package to refine mutant locations.
         type: boolean
@@ -117,11 +145,14 @@ jobs:
           r-version: ${{ inputs.r-version }}
           use-public-rspm: true
 
+      # mutator itself is installed by the dedicated step below, not here, so a
+      # failure to install it from CRAN/r-universe can be caught and retried
+      # against GitHub instead of failing the whole dependency step.
       - name: Assemble package list
         id: pkgs
         shell: bash
         run: |
-          pkgs="any::pkgbuild, ${{ inputs.mutator-spec }}"
+          pkgs="any::pkgbuild"
           if [ "${{ inputs.install-imputesrcref }}" = "true" ]; then
             pkgs="$pkgs, ${{ inputs.imputesrcref-spec }}"
           fi
@@ -137,6 +168,91 @@ jobs:
           needs: check
           dependencies: 'c("Depends", "Imports", "LinkingTo", "Suggests")'
           install-pandoc: false
+
+      # Install mutator from the requested source, falling back to a pinned
+      # GitHub tag when the repository copy is missing or fails to build. The
+      # step is skipped when mutator is the package under test, since the
+      # `local::.` entry above has already installed it.
+      - name: Install mutator
+        if: ${{ inputs.mutator-spec != '' || inputs.mutator-source != 'local' }}
+        shell: Rscript {0}
+        env:
+          MUTATOR_SOURCE: ${{ inputs.mutator-source }}
+          MUTATOR_SPEC: ${{ inputs.mutator-spec }}
+          MUTATOR_REF: ${{ inputs.mutator-ref }}
+          MUTATOR_FALLBACK: ${{ inputs.mutator-fallback }}
+          MUTATOR_RUNIVERSE_REPO: ${{ inputs.r-universe-repo }}
+        run: |
+          src <- Sys.getenv("MUTATOR_SOURCE")
+          spec <- Sys.getenv("MUTATOR_SPEC")
+          ref <- Sys.getenv("MUTATOR_REF")
+          github_spec <- if (nzchar(ref)) {
+            paste0("github::PRL-PRG/mutator@", ref)
+          } else {
+            "github::PRL-PRG/mutator"
+          }
+
+          fallback <- NULL
+          if (nzchar(spec)) {
+            primary <- spec
+          } else {
+            primary <- switch(src,
+              cran = "any::mutator",
+              "r-universe" = "any::mutator",
+              github = github_spec,
+              local = stop("the local source installs nothing; this step must be skipped"),
+              stop(sprintf(
+                "mutator-source must be 'cran', 'r-universe', 'github' or 'local', got '%s'",
+                src
+              ), call. = FALSE)
+            )
+            if (identical(src, "r-universe")) {
+              repo <- Sys.getenv("MUTATOR_RUNIVERSE_REPO")
+              if (!nzchar(repo)) stop("r-universe-repo must not be empty", call. = FALSE)
+              options(repos = c(runiverse = repo, getOption("repos")))
+            }
+            if (!identical(src, "github") &&
+                identical(tolower(Sys.getenv("MUTATOR_FALLBACK")), "true")) {
+              fallback <- github_spec
+            }
+          }
+
+          # setup-r-dependencies keeps pak in its own library, so load it from
+          # there rather than adding it to .libPaths() (which would divert the
+          # install away from the cached user library).
+          pak_lib <- Sys.getenv("R_LIB_FOR_PAK")
+          have_pak <- nzchar(pak_lib) &&
+            requireNamespace("pak", lib.loc = pak_lib, quietly = TRUE)
+          if (!have_pak && !requireNamespace("pak", quietly = TRUE)) {
+            install.packages("pak", repos = sprintf(
+              "https://r-lib.github.io/p/pak/stable/%s/%s/%s",
+              .Platform$pkgType, R.version$os, R.version$arch
+            ))
+          }
+
+          install <- function(spec) {
+            tryCatch({
+              pak::pkg_install(spec, ask = FALSE)
+              requireNamespace("mutator", quietly = TRUE)
+            }, error = function(e) {
+              message(sprintf("Installing '%s' failed: %s", spec, conditionMessage(e)))
+              FALSE
+            })
+          }
+
+          cat(sprintf("Installing mutator from '%s'\n", primary))
+          if (!install(primary) && !is.null(fallback)) {
+            cat(sprintf(
+              "::warning::mutator could not be installed from '%s'; falling back to '%s'\n",
+              primary, fallback
+            ))
+            install(fallback)
+          }
+
+          if (!requireNamespace("mutator", quietly = TRUE)) {
+            stop("mutator could not be installed", call. = FALSE)
+          }
+          cat(sprintf("Using mutator %s\n", as.character(utils::packageVersion("mutator"))))
 
       - name: Run mutation testing
         shell: Rscript {0}

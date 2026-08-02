@@ -15,8 +15,9 @@ jobs:
       contents: write
     uses: ./.github/workflows/mutation-testing.yaml
     with:
-      # Install mutator from this checkout rather than from GitHub.
-      mutator-spec: local::.
+      # mutator is the package under test here, so the checkout provides it and
+      # nothing is installed from CRAN, r-universe or GitHub.
+      mutator-source: local
       target-margin: "0.10"
       isolate: true
       # Exact file-level coverage attribution (no helper-file fallback), so each
