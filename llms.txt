@@ -1,5 +1,9 @@
 # mutator
 
+[![CRAN
+status](https://www.r-pkg.org/badges/version/mutator)](https://CRAN.R-project.org/package=mutator)
+[![CRAN
+downloads](https://cranlogs.r-pkg.org/badges/mutator)](https://CRAN.R-project.org/package=mutator)
 [![R-CMD-check](https://github.com/PRL-PRG/mutator/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/PRL-PRG/mutator/actions/workflows/R-CMD-check.yaml)
 [![r-universe](https://prl-prg.r-universe.dev/mutator/badges/version)](https://prl-prg.r-universe.dev/mutator)
 [![Codecov test
@@ -66,8 +70,8 @@ mutator](https://www.pdonatbouillud.com/talk/beyond-code-coverage-mutation-testi
   performance
 - **Coverage-guided Test Selection**: Runs only the tests that cover
   mutated lines, also for improved performance
-- **Configurable Test Harness**: Supports both `testthat` and
-  non-`testthat` test layouts
+- **Configurable Test Harness**: First-class `testthat` and `tinytest`
+  support, plus a generic installed-tests fallback for other layouts
 - **Timeout Management**: Automatically calibrates timeouts for mutant
   test runs to prevent hangs
 - **Annotations and Exclusions**: Allows developers to exclude specific
@@ -92,6 +96,13 @@ install.packages("mutator")
 # Install the development version from GitHub; package dependencies are installed automatically
 # install.packages("remotes")
 remotes::install_github("PRL-PRG/mutator")
+
+# Or install pre-built binaries of the development version from R-universe
+# (https://prl-prg.r-universe.dev)
+install.packages("mutator", repos = c(
+  "https://prl-prg.r-universe.dev",
+  "https://cloud.r-project.org"
+))
 
 # Or install from local source, in an R console
 # install.packages("devtools")
@@ -156,39 +167,23 @@ name: mutation-testing
 
 jobs:
   mutation:
-    uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.1.1
+    uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.2.2
     with:
-      target-margin: "0.10"   # sample to +/-10 percentage points
-      fail-under: "75"        # fail CI below a 75% mutation score
+      target-margin: "0.10" # sample to +/-10 percentage points
+      fail-under: "75" # fail CI below a 75% mutation score
 ```
 
-Pin to a released tag such as `@v0.1.1`; the workflow is versioned with
-the mutator package, so the tag matches the package version. Set
-`deploy-badge: true` (with `contents: write` permission) to publish a
-shields.io badge. See the [Continuous integration
+Pin to a released tag such as `@v0.2.2`; the workflow is versioned with
+the mutator package, so the tag matches the package version. It installs
+mutator from CRAN and falls back to the matching GitHub tag when CRAN
+cannot provide it; `mutator-source: r-universe` or
+`mutator-source: github` picks another source. Set `deploy-badge: true`
+(with `contents: write` permission) to publish a shields.io badge. See
+the [Continuous integration
 vignette](https://prl-prg.github.io/mutator/articles/continuous-integration.html)
 for every input, threshold guidance, and badge setup. From an installed
 copy, open it with
 [`vignette("continuous-integration", package = "mutator")`](https://prl-prg.github.io/mutator/articles/continuous-integration.md).
-
-## Mutation testing modes
-
-mutator selects a package test strategy automatically:
-
-- If `tests/testthat/` exists, mutator loads the mutant in-process with
-  [`pkgload::load_all()`](https://pkgload.r-lib.org/reference/load_all.html)
-  and mirrors the package’s own `tests/testthat.R` harness by forwarding
-  extractable arguments (notably any `filter`) from
-  [`testthat::test_check()`](https://testthat.r-lib.org/reference/test_package.html)
-  to
-  [`testthat::test_dir()`](https://testthat.r-lib.org/reference/test_dir.html),
-  without paying for an install per mutant.
-- Otherwise, if `tests/` exists, mutator falls back to
-  `tools::testInstalledPackage(..., types = "tests")` after installing
-  each mutant with `--install-tests`.
-
-The fallback path supports non-`testthat` layouts (for example
-`tinytest`-driven packages that run through `tests/` scripts).
 
 ## Configuration
 
@@ -200,6 +195,10 @@ vignette](https://prl-prg.github.io/mutator/articles/configuration.html)**
 (from an installed copy, open it with
 [`vignette("configuration", package = "mutator")`](https://prl-prg.github.io/mutator/articles/configuration.md)):
 
+- **Test strategy selection** (`strategy`): how mutator auto-detects a
+  package’s test harness (`testthat`, `tinytest`, or the generic
+  installed-tests fallback) and when to override it with
+  `tinytest-installed`.
 - **Timeouts and the contended baseline**: how the per-mutant `HANG`
   timeout is self-calibrated from a parallelism-aware baseline, and
   `timeout_seconds` to override it.
@@ -215,8 +214,8 @@ vignette](https://prl-prg.github.io/mutator/articles/configuration.html)**
   `.covrignore`.
 - **Coverage-guided test selection** (`coverage_guided`,
   `coverage_backend`): on by default, runs only the tests that cover
-  each mutated line (testthat strategy; warns and runs the full suite
-  otherwise).
+  each mutated line (testthat and tinytest strategies; warns and runs
+  the full suite under the generic installed-tests fallback).
 - **Precise mutant locations**: the optional `imputesrcref` package for
   narrower operator-mutant source ranges.
 - **Equivalent mutant detection** (`detectEqMutants`): configuring the
@@ -275,7 +274,7 @@ Run the full test suite with:
 devtools::test()
 ```
 
-## System tests
+### System tests
 
 `mutator` includes a set of system tests that run mutation testing on 9
 packages from CRAN. It compares the mutants, surviving, killed, hanged
@@ -286,7 +285,7 @@ across a set of configuration options that ought not to change the
 results. The system tests are located in `tests/system` and are
 automatically run as par of the CI.
 
-## Mutation testing
+### Mutation testing
 
 We practice dogfooding and run `mutator` on `mutator` test suite itself.
 This already led to numerous improvements in `mutator` speed, as waiting
