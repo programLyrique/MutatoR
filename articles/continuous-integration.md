@@ -28,12 +28,12 @@ name: mutation-testing
 
 jobs:
   mutation:
-    uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.2.2
+    uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.3.0
     with:
       target-margin: "0.10"
 ```
 
-Pin to a released tag such as `@v0.2.2`. The reusable workflow lives in
+Pin to a released tag such as `@v0.3.0`. The reusable workflow lives in
 the mutator package repository and is versioned with the package, so the
 tag you pin matches a mutator release. Bump the tag in your caller when
 you want to move to a newer release. You can also pin to a branch (for
@@ -56,6 +56,7 @@ All inputs are optional.
 | `coverage-guided` | `true` | Run only the tests covering each mutated line. Disabled automatically, with a warning, for installed-tests packages. |
 | `coverage-backend` | `record_tests` | How coverage is attributed to tests. `"per_file"` gives exact file-level attribution (no helper-file fallback), at the cost of relying on covr internals. |
 | `exclude-files` | `""` | Glob patterns of `R/` files to skip. |
+| `operators` | `""` | Mutation operators, e.g. `"default, seq_idiom, -bool_flip"`. Empty uses the default set. See [`mutation_operators()`](https://prl-prg.github.io/mutator/reference/mutation_operators.md). |
 | `badge-label` | `mutator` | Label shown on the shields.io badge. |
 | `deploy-badge` | `false` | Publish a badge. Requires `contents: write`. |
 | `badge-branch` | `gh-pages` | Branch the badge JSON is deployed to. |
@@ -88,14 +89,14 @@ Set `mutator-source` to pick a different source:
 ``` yaml
 jobs:
   mutation:
-    uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.2.2
+    uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.3.0
     with:
       mutator-source: r-universe
 ```
 
 `mutator-ref` fixes which commit the `github` source and the fallback
 use. It defaults to the tag the workflow is versioned with, so a caller
-pinned to `@v0.2.2` also falls back to mutator `v0.2.2` rather than to a
+pinned to `@v0.3.0` also falls back to mutator `v0.3.0` rather than to a
 moving `main`. Point it at `main` to track development, at the cost of
 reproducibility:
 
@@ -120,7 +121,7 @@ the job exits non-zero, which blocks the pull request:
 ``` yaml
 jobs:
   mutation:
-    uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.2.2
+    uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.3.0
     with:
       fail-under: "75"
       target-margin: "0.05"
@@ -156,7 +157,7 @@ jobs:
   mutation:
     permissions:
       contents: write
-    uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.2.2
+    uses: PRL-PRG/mutator/.github/workflows/mutation-testing.yaml@v0.3.0
     with:
       deploy-badge: true
 ```

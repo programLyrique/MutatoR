@@ -10,8 +10,8 @@
   : Generate Mutants for a Single R File
 - [`mutate_package()`](https://prl-prg.github.io/mutator/reference/mutate_package.md)
   : Run Mutation Testing for an R Package
-- [`operators`](https://prl-prg.github.io/mutator/reference/operators.md)
-  : Mutation Operators Supported by mutator
+- [`mutation_operators()`](https://prl-prg.github.io/mutator/reference/mutation_operators.md)
+  : List the Mutation Operators
 - [`reset_openai_config()`](https://prl-prg.github.io/mutator/reference/reset_openai_config.md)
   : Clear session OpenAI configuration
 - [`set_openai_config()`](https://prl-prg.github.io/mutator/reference/set_openai_config.md)
